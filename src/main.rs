@@ -1,5 +1,5 @@
 
-//mod fs;
+mod fs;
 
 mod cache;
 
@@ -7,11 +7,11 @@ mod cache;
 fn main() {
 
 
- //   let fs= Fs::new();
+    let fs= fs::Fs::new(cache::PathU8::new(), fs::DEFAULT_LIMIT);
  //
  //
 
-    let tree = cache::CacheFsTree::new();
+    //let _tree = cache::CacheFsTree::new(256 * 1024 * 1024);
 
     /*
     let server = http::new();

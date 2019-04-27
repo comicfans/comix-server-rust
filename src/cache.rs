@@ -1,186 +1,216 @@
 extern crate lru;
 
-use std::path::PathBuf;
-use std::ffi::OsStr;
-use std::ffi::OsString;
+
 use std::string::String;
+use std::vec::Vec;
 
 use lru::LruCache;
 
 
-const ROOT_ID : u64 = 0;
+pub type PathU8 = std::path::PathBuf;
 
-use PathU8 = String
+pub type Binary = std::vec::Vec<u8>;
 
-use NodeId = String
+type NodeId = PathU8;
 
-fn path_to_id(path : PathU8)->NodeId{
-    return path
+fn path_to_id(path : &PathU8)->NodeId{
+    return path.clone();
 }
 
-
-struct Dir{
-    id: NodeId,
-    contents: std::collections::HashMaps<String,NodeId>,
-}
-
-enum Contents{
-    File(Vec<u8>),
-    Dir(Vec<String>)
-}
 
 struct SizedLru{
-    lru: LruCache,
-    cache_size: u64,
-    limit_size: u64,
+    lru: LruCache<NodeId, Binary>,
+    size: usize,
+    limit: usize,
 }
 
 impl SizedLru{
-    fn new()->SizedLru(limit_size){
+    fn new(limit: usize)->SizedLru{
 
         SizedLru{
-            lru: LruCache::new(),
-            cache_size:0,
-            limit_size:limit_size
+            lru: LruCache::new(std::usize::MAX),
+            size:0,
+            limit:limit
         }
     }
 
-    fn add(&mut self, key: PathU8, binary: Vec<u8>){
-        assert!(!self.lru.get(key).is_none());
+    fn put(&mut self, key: &PathU8, binary: Binary){
 
-        self.lru.add(key,contents);
+        assert!(self.lru.get(key).is_none());
 
-        self.cache_size += binary.size();
+        self.size += binary.len();
 
-        if  self.cache_size > self.limit_size {
+        self.lru.put(key.clone(),binary);
+
+        if  self.size > self.limit {
             self.recycle();
         }
     }
 
-    fn recycle(&mut self){
+    fn get (&mut self, key: &PathU8)-> Option<&Binary>{
+        self.lru.get(key)
+    }
 
-        assert!(self.cache_size >self.limit_size );
-        let keys : Vec<PathU8> = std::vec::new();
+    fn remove(&mut self, node_id: &NodeId){
+        match self.lru.get(node_id){
+            None=>{
+                return;
+            }
+            Some(v)=>{
 
-        for it  = self.lru.iter() {
-            keys.add(it);
-            self.cache_size -= it->size();
+                assert!(self.size>= v.len());
+                self.size -= v.len();
+            }
+        }
+    }
 
-            assert!(self.cache_size >= 0 );
 
-            if self.cache_size <= self.limit_size  {
-                break;
+fn recycle(&mut self){
+
+    assert!(self.size > self.limit);
+
+    let mut keys: Vec <NodeId> = Vec::new();
+
+        for it in self.lru.iter() {
+            keys.push(it.0.clone());
+
+            assert!(self.size >= it.1.len());
+
+            self.size -= it.1.len();
+
+            if self.size <= self.limit{
+                break
             }
         }
 
-        for key in keys.iter(){
-            self.lru.pop(key);
-        }
-    }
-
-    
-}
-
-
-impl Dir{
-
-    fn new()-> Node{
-        Node{
-            id:id,
-            contents: std::collections::HashMap::new()
-        }
-    }
-
-    fn set_children(&mut self, children: std::collections::HashMap<String,u64> ){
-        assert!(self.contents.empty());
-        self.contents = children;
+    for key in keys.iter(){
+        self.lru.pop(key);
     }
 }
+}
+
 
 
 pub struct CacheFsTree{
 
-    id_dir_map: std::collections::BTreeMap<NodeId,Node>,
     file_cache : SizedLru,
-    dir_cache: std::collections::HashMap<NodeId, Vec<String> >
+    dir_cache: std::collections::HashMap<NodeId, Vec<(String,NodeId)> >
 }
 
 
 impl CacheFsTree {
-    pub fn new()-> CacheFsTree{
+    pub fn new(limit: usize)-> CacheFsTree{
 
         let mut ret = CacheFsTree{
-            id_object_map 
-            id_objects: std::collections::BTreeMap::new(),
-            lru: std::collections::BTreeMap::new(),
-            reverse_map:std::collections::HashMap::new()
+            file_cache: SizedLru::new(limit),
+            dir_cache:std::collections::HashMap::new()
         };
 
-        ret.id_objects.insert(ROOT_ID,Node::Dir{id:ROOT_ID,children:std::collections::HashMap::new()});
+        let virtual_root_id = path_to_id(&PathU8::new());
+
+        ret.dir_cache.insert(virtual_root_id, std::vec::Vec::new());
 
         ret
     }
 
-    pub fn set_children(self, root: PathU8, children: Vec<String>) {
+    pub fn set_children(&mut self, root: &PathU8, children: &Vec<String>) {
 
-        let node = self.grow_dir(root);
+        assert!(self.check_dir_exists(root));
 
-        let mut temp_path = root.clone();
-
-        let children  = std::collections::HashMap::new();
+        let mut dir_children = std::vec::Vec::new();
 
         for name in children.iter(){
-
-            temp_path.push(name);
-
-            children.insert(name, temp_path.hash);
-
-        }
-
-        node.set_children(root, children);
-    }
-
-    fn remove_by_path(&mut self,path :PathU8){
-        self.remove_by_id(path_to_id(path));
-    }
-
-    fn remove(&mut self,node_id : NodeId){
-
-        let entry = self.id_objects.entry(node_id);
-
-        panic!(!entry.is_none());
         
-        if let Some(children)= entry.node.children{
+            let mut temp_path = root.clone();
 
-            for child in children.iter(){
-                self.remove(child);
-            }
+            temp_path.push(name.clone());
+
+            dir_children.push((name.clone(),path_to_id(&temp_path)));
+
         }
 
-        self.lru.remove(node_id);
+        let node_id = &path_to_id(root);
+        assert!(!self.dir_cache.contains_key(node_id));
+
+        self.dir_cache.insert(node_id.clone(), dir_children);
+
+    }
+
+    fn remove_by_path(&mut self,path :&PathU8){
+        self.remove_by_id(&path_to_id(&path));
+    }
+
+    fn remove_by_id(&mut self,node_id : &NodeId){
+
+        let mut ids = std::vec::Vec::new();
+
+        {
+        let entry = self.dir_cache.get(node_id);
+
+        if entry.is_none() {
+            //this is not a dir object
+            
+            self.file_cache.remove(node_id);
+            return;
+        }
+
+
+        for (_,id) in entry.unwrap().iter(){
+            ids.push(id.clone());
+        }
+        }
+
+
+        for id in ids.iter() {
+            self.remove_by_id(&id.clone());
+        }
+        
+
         self.dir_cache.remove(node_id);
-        self.id_objects.remove(node_id);
-
     }
 
-    pub fn set_binary(&mut self,path : PathU8, bytes: Vec<u8> ) {
+    fn check_dir_exists(&mut self, path: &PathU8)->bool{
 
-        let node_id = path_to_id(path);
+        for i in path.iter() {
+            return true;
+        }
 
-        self.lru.set(node_id, bytes);
+        return false;
     }
 
-    pub fn get(&mut self, path: PathU8)-> Option<Contents>{
+    pub fn set_binary(&mut self,path : &PathU8, bytes: Binary ) {
 
-       if let Some(binary) = self.lru.get(path) {
-           return Some(binary);
+        let node_id = path_to_id(&path);
+
+        assert!(!self.dir_cache.contains_key(&node_id));
+
+        assert!(self.check_dir_exists(path));
+
+        self.file_cache.put(&node_id, bytes);
+    }
+
+    pub fn try_write<W: std::io::Write> (& mut self, path: &PathU8, writer: &mut W) -> bool {
+
+       if let Some(binary) = self.file_cache.get(path) {
+           let _ = writer.write(binary);
+           return true;
        }
 
        if let Some(children) = self.dir_cache.get(path){
-           return Some(children);
+
+           //ignore write error
+           let mut first = true;
+           for (child,_) in children.iter(){
+               if !first {
+                   let _= writer.write("\n".as_bytes());
+               }
+               let _=writer.write(child.as_bytes());
+               first=false;
+           }
+
+           return true;
        }
 
-       None
+       return false;
     }
 }
-

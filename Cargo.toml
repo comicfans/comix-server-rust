@@ -1,8 +1,8 @@
 [package]
-name = "comix-server-rs"
-version = "0.1.0"
 authors = ["unknown <unknown@ad.com>"]
 edition = "2018"
-
+name = "comix-server-rs"
+version = "0.1.0"
 [dependencies]
+lru = "*"
 notify = "4.0.0"
