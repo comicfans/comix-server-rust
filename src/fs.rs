@@ -53,8 +53,12 @@ pub fn watch(rwlock : &mut std::sync::RwLock<CacheFsTree> ){
 pub struct Fs{
     root : std::path::PathBuf,
     rwlock: std::sync::RwLock<CacheFsTree>,
-    watch_thread : std::thread::JoinHandle<()>
+    watch_thread : std::thread::JoinHandle<()>,
+    ar_handle : None
+
 }
+
+
 
 impl Fs{
 
@@ -65,16 +69,19 @@ impl Fs{
         cache.remove(path);
     }
 
-    pub fn new(path: &PathU8, limit :usize){
+    pub fn new(path: &PathU8, limit :usize)->Result<Fs>{
 
-        //TODO path convert to abs
+        
+        let abs_root = std::fs::cancanlize(path);
 
         let mut ret = Fs{
-            root: path,
+            root: abs_root,
             rwlock:std::sync::RwLock::new(CacheFsTree::new(limit)),
             watch_thread: std::thread::spawn(||{
             })
         };
+
+
 
                 
         ret.watch_thread = std::thread::spawn(||{watch(&mut ret.rwlock)});
@@ -82,59 +89,62 @@ impl Fs{
 
         //access root . root is special since it can be virtual root of all 
         //partition driver under windows
-        //
-        if path.is_empty() {
-            
-            /*
-            if cfg!(windows) {
+        
+        ret.access(ret.root ,PathU8::from(""))?;
 
-                let children= std::vec::new();
-                for drive in windows.emuerate_drive ().iter(){
-                    children.push(drive);
-                }
-                self.cache.add(sjdkf);
-            }
-
-            else{
-            }
-            */
-                
-            ret.access('/', PathU8::new(), &std::io::sink());
-
-            return ret;
-        }
+        return ret;
+        
     }
 
-    fn access <W : std::io::Write>(&mut self, parent : &PathU8 ,left : &PathU8, w: &mut W){
+    fn archive_tree<W : std::io::Write>(&mut self, path : &PathU8, relative: &PathU8, writer : &mut Write )->io::Result<()>{
 
-        let segment = self.root;
+        self.archive = Builder::new()
 
-        let f_stat=stat(path);
+    }
 
-        if f.is_file {
-            let binary = fread(f);
+    fn access <W : std::io::Write>(&mut self, relative: &PathU8, writer : &mut Write )->io::Result<()>{
 
-            match binary{
-                Some(v)=>{
-                    self.cache.add(path, binary);
-                    return binary;
-                },
-                None(v)=>{
-                    return String::From("read file failed");
-                }
-            };
+        let fullpath = self.root.join(relative);
+
+        let attr = std::fs::metadata(fullpath)?;
+        
+        if attr.is_dir() {
+
+            let children = std::vec::Vec::new();
+
+            for entry in fs::read_dir(dir)? {
+                let entry = entry?;
+                children.push(entry.file_name());
+            }
+
+            let cache = self.rwlock.write().unwrap();
+
+            cache.set_children(relative, children);
+
+            cache.get(relative, w);
+
+            return;
         }
 
-        // is dir
-        let fs_res = readdir_r(path);
 
-        let children = std::vec::Vec::new();
+        // is file
+        // first test if this is image file
+        
+        let supported_image = vec!["jpg","jpeg","bmp","gif","png"];
 
-        for i in fs_res{
-            children.push(i.name, i.is_file)
+        let ext = path.extension_name();
+
+        // is image file from filesystem, no need to cache
+        if ext.ToLower() in supported_image {
+            let file = File::open(path)?;
+            let reader = BufReader::new(file);
+            writer.write(reader.ReadAll());
+            return;
         }
 
-        self.cache.set_children(path,children);
+
+        // try to open as archive 
+        return self.access_in_archive( fullpath, PathU8::from(""),writer);
     }
     
 

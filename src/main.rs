@@ -1,7 +1,7 @@
 
-mod fs;
+//mod fs;
 
-mod cache;
+//mod cache;
 
 
 fn main() {
@@ -10,6 +10,12 @@ fn main() {
     let fs= fs::Fs::new(cache::PathU8::new(), fs::DEFAULT_LIMIT);
  //
  //
+ 
+    //println!("{}",std::path::PathBuf::new().is_empty());
+    println!("{:?}",std::path::PathBuf::new());
+    println!("{}",std::path::PathBuf::new() == std::path::PathBuf::from(""));
+    println!("{}",std::path::PathBuf::new().is_relative());
+    println!("{}",std::path::PathBuf::new().is_absolute());
 
     //let _tree = cache::CacheFsTree::new(256 * 1024 * 1024);
 
