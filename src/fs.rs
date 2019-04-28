@@ -1,6 +1,12 @@
+extern crate libarchive;
+
+use libarchive::reader::Builder;
+use libarchive::reader::Reader;
 
 use super::cache::CacheFsTree;
 use super::cache::PathU8;
+use super::cache::NodeContents;
+
 use notify::{RecommendedWatcher, Watcher, RecursiveMode};
 use std::sync::mpsc::channel;
 use std::time::Duration;
@@ -16,6 +22,7 @@ fn prefix_virtual_root (input : &PathU8) -> PathU8 {
     
 
 }
+
 
 pub const DEFAULT_LIMIT : usize = 256 * 1024 * 1024;
 
@@ -90,19 +97,13 @@ impl Fs{
         //access root . root is special since it can be virtual root of all 
         //partition driver under windows
         
-        ret.access(ret.root ,PathU8::from(""))?;
+        let _=ret.access(ret.root ,PathU8::from(""))?;
 
         return ret;
         
     }
 
-    fn archive_tree<W : std::io::Write>(&mut self, path : &PathU8, relative: &PathU8, writer : &mut Write )->io::Result<()>{
-
-        self.archive = Builder::new()
-
-    }
-
-    fn access <W : std::io::Write>(&mut self, relative: &PathU8, writer : &mut Write )->io::Result<()>{
+    fn access_fs <W : std::io::Write>(&mut self, relative: &PathU8)->Result<NodeContents>{
 
         let fullpath = self.root.join(relative);
 
