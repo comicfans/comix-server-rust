@@ -2,6 +2,7 @@ extern crate libarchive;
 extern crate lru;
 
 use libarchive::reader::Builder;
+use libarchive::reader::Reader;
 
 use std::string::String;
 use std::vec::Vec;
@@ -91,6 +92,7 @@ impl SizedLru {
 pub struct CacheFsTree {
     file_cache: SizedLru,
     dir_tree: std::collections::HashMap<NodeId, (Vec<String>, Vec<NodeId>)>,
+    archive_readers: std::collections::HashMap<NodeId, Box<Reader>>
 }
 
 pub enum NodeContents<'a> {
@@ -100,19 +102,11 @@ pub enum NodeContents<'a> {
 
 impl CacheFsTree {
     pub fn new(limit: usize) -> CacheFsTree {
-        let mut ret = CacheFsTree {
+        CacheFsTree {
             file_cache: SizedLru::new(limit),
             dir_tree: std::collections::HashMap::new(),
-        };
-
-        let virtual_root_id = path_to_id(&PathU8::new());
-
-        ret.dir_tree.insert(
-            virtual_root_id,
-            (std::vec::Vec::new(), std::vec::Vec::new()),
-        );
-
-        ret
+            archive_readers: std::collections::HashMap::new()
+        }
     }
 
     pub fn set_children(&mut self, root: &PathU8, children: &Vec<String>) {
@@ -163,6 +157,7 @@ impl CacheFsTree {
         }
 
         self.dir_tree.remove(node_id);
+        self.archive_readers.remove(node_id);
     }
 
     fn check_dir_exists(&mut self, path: &PathU8) -> bool {
@@ -173,7 +168,7 @@ impl CacheFsTree {
         return false;
     }
 
-    pub fn set_binary(&mut self, path: &PathU8, bytes: Binary) {
+    fn set_binary(&mut self, path: &PathU8, bytes: Binary) {
         let node_id = path_to_id(&path);
 
         assert!(!self.dir_tree.contains_key(&node_id));
@@ -184,6 +179,8 @@ impl CacheFsTree {
     }
 
     pub fn get(&mut self, path: &PathU8) -> Option<NodeContents> {
+
+        // first test cache hit
         if let Some(binary) = self.file_cache.get(path) {
             return Some(NodeContents::File(binary));
         }
@@ -192,8 +189,40 @@ impl CacheFsTree {
             return Some(NodeContents::Dir(&children.0));
         }
 
+        // second test if this is inside a existing archive
+
         return None;
     }
 
-    pub fn set_archive(&mut self, path: &PathU8, reader: Reader) -> Result<()> {}
+    pub fn set_archive(&mut self, path: &PathU8, archive_path:&PathU8 ) -> Option<libarchive::error::ArchiveError>{
+
+        let node_id  = path_to_id(path);
+
+        assert!(!self.file_cache.contains_key(&node_id));
+
+        if self.dir_tree.contains_key(&node_id) {
+            //already read. ignore
+            return None;
+        }
+
+        //first time read
+        //
+        let builder = Builder::new();
+
+
+        let res = builder.open_file(archive_path);
+
+        if res.is_err() {
+            return res.err();
+        }
+
+        let reader = res.unwrap();
+
+        self.archive_readers.insert(path.clone(), Box::new(reader));
+
+        //list files in archive
+
+
+        return None;
+    }
 }

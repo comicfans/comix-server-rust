@@ -145,7 +145,7 @@ impl Fs{
 
 
         // try to open as archive 
-        return self.access_in_archive( fullpath, PathU8::from(""),writer);
+        return self.rwlock.write().unwrap().set_archive( relative,fullpath);
     }
     
 
