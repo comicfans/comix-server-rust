@@ -109,7 +109,7 @@ impl CacheFsTree {
         }
     }
 
-    pub fn set_children(&mut self, root: &PathU8, children: &Vec<String>) {
+    fn set_children(&mut self, root: &PathU8, children: &Vec<String>) {
         assert!(self.check_dir_exists(root));
 
         let mut ids = std::vec::Vec::new();
@@ -216,11 +216,17 @@ impl CacheFsTree {
             return res.err();
         }
 
-        let reader = res.unwrap();
+
+        let mut reader = res.unwrap();
+
+        let header = reader.next_header();
+
+        //list files in archive
+
+        let entry =reader.entry();
 
         self.archive_readers.insert(path.clone(), Box::new(reader));
 
-        //list files in archive
 
 
         return None;
