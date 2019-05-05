@@ -3,6 +3,7 @@ extern crate lru;
 
 use libarchive::reader::Builder;
 use libarchive::reader::Reader;
+use libarchive::archive::Entry;
 
 use std::string::String;
 use std::vec::Vec;
@@ -28,7 +29,7 @@ struct SizedLru {
 impl SizedLru {
     fn new(limit: usize) -> SizedLru {
         SizedLru {
-            lru: LruCache::new(std::usize::MAX),
+            lru: LruCache::new(4096),
             size: 0,
             limit: limit,
         }
@@ -207,7 +208,10 @@ impl CacheFsTree {
 
         //first time read
         //
-        let builder = Builder::new();
+        let mut builder = Builder::new();
+
+        builder.support_format(libarchive::archive::ReadFormat::All).ok();
+        builder.support_filter(libarchive::archive::ReadFilter::All).ok();
 
 
         let res = builder.open_file(archive_path);
@@ -219,16 +223,62 @@ impl CacheFsTree {
 
         let mut reader = res.unwrap();
 
-        let header = reader.next_header();
+        loop{
+        
+            let header = reader.next_header();
+            if header.is_none() {
+                break;
+            }
+
+            let e= header.unwrap();
+
+            let path = e.pathname();
+            match e.filetype(){
+                libarchive::archive::FileType::RegularFile=>{
+                    print!("file {}\n",path);
+                },
+                libarchive::archive::FileType::Directory=>{
+                    print!("dir {}\n",path);
+                },
+                _=>{}
+            };
+
+
+        }
 
         //list files in archive
 
         let entry =reader.entry();
+
 
         self.archive_readers.insert(path.clone(), Box::new(reader));
 
 
 
         return None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    fn internal() {
+        let mut tree = CacheFsTree::new(1000);
+
+        let p = tree.set_archive(&PathU8::from("/"),&PathU8::from("sdf.zip"));
+
+        assert!(!p.is_none());
+
+        let mut d = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    
+        d.push("tests/logtrail-6.6.1-0.1.31.zip");
+
+        let r = tree.set_archive(&PathU8::from("/"),&d);
+
+        assert!(r.is_none());
+
     }
 }
