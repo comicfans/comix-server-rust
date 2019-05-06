@@ -2,7 +2,10 @@
 
 mod cache;
 
+mod archive;
+
 fn main() {
+    /*
     let mut c = cache::CacheFsTree::new(123);
 
     let k = c.get(&cache::PathU8::new());
@@ -26,6 +29,7 @@ fn main() {
     println!("{}", std::path::PathBuf::new().is_absolute());
 
     //let _tree = cache::CacheFsTree::new(256 * 1024 * 1024);
+    */
 
     /*
     let server = http::new();

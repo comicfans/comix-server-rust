@@ -1,18 +1,24 @@
-extern crate libarchive;
 extern crate lru;
-
-use libarchive::reader::Builder;
-use libarchive::reader::Reader;
-use libarchive::archive::Entry;
 
 use std::string::String;
 use std::vec::Vec;
+use std::collections::{HashMap,HashSet};
+use std::fmt::{Display, Formatter};
+use std::iter::FromIterator;
+
+
+
 
 use lru::LruCache;
+
+use super::archive::Archive;
+use super::archive::Zip;
 
 pub type PathU8 = std::path::PathBuf;
 
 pub type Binary = std::vec::Vec<u8>;
+
+const VIRTUAL_ROOT_PATH: &str = "*virtual_root*";
 
 type NodeId = PathU8;
 
@@ -90,44 +96,114 @@ impl SizedLru {
     }
 }
 
-pub struct CacheFsTree {
+pub struct ArchiveCache<'a>{
     file_cache: SizedLru,
-    dir_tree: std::collections::HashMap<NodeId, (Vec<String>, Vec<NodeId>)>,
-    archive_readers: std::collections::HashMap<NodeId, Box<Reader>>
+    dir_tree: HashMap<NodeId, HashMap<String,NodeId>>,
+    archive: HashMap<NodeId, Box<Archive<'a> + 'a > >
+}
+
+impl Display for ArchiveCache<'static> {
+    fn fmt(&self, f: &mut Formatter)->std::fmt::Result<> {
+
+        let virtual_root_path = PathU8::from(VIRTUAL_ROOT_PATH);
+        let virtual_root_id = path_to_id(&virtual_root_path);
+
+        let root = String::from(VIRTUAL_ROOT_PATH);
+        let walked = Vec::from(vec![(&root,&virtual_root_id,true)]);
+
+        self.recurisve_walk(&walked, true, f);
+
+        write!(f,"\n")
+    }
 }
 
 pub enum NodeContents<'a> {
     File(&'a Vec<u8>),
-    Dir(&'a Vec<String>),
+    Dir(Vec<&'a String>),
 }
 
-impl CacheFsTree {
-    pub fn new(limit: usize) -> CacheFsTree {
-        CacheFsTree {
-            file_cache: SizedLru::new(limit),
-            dir_tree: std::collections::HashMap::new(),
-            archive_readers: std::collections::HashMap::new()
-        }
+fn to_display_name(v: &String)->String{
+    if v.is_empty() {
+        return String::from("*EMPTY*");
+    }
+    return v.clone();
+}
+
+impl ArchiveCache<'static> {
+
+    fn recurisve_walk (&self, walked_path: &Vec<(&String,&NodeId,bool)>, from_sibling: bool,f: &mut Formatter)
+        {
+
+            assert!(walked_path.len()>=1);
+
+            let this_node = &walked_path[walked_path.len()-1];
+
+            let entry = self.dir_tree.get(this_node.1);
+
+            if from_sibling {
+                //preserve space of parent
+                let _ = write!(f,"\n");
+
+                for (idx,tuple) in walked_path.split_last().unwrap().1.iter().enumerate(){
+
+                    let name = to_display_name(tuple.0);
+                    let next_child_is_last = walked_path[idx+1].2;
+
+                    let this_is_last_parent = idx != walked_path.len()-2;
+
+                    let _ = write!(f,"{}"," ".repeat(name.len()-1));
+
+
+                    if !next_child_is_last{
+                        let _ = write!(f,"|");
+                    }else{
+                        let _ = write!(f," ");
+                    }
+
+                    if this_is_last_parent {
+                        let _ = write!(f," ");
+                    }
+                }
+            }
+
+            if walked_path.len() !=1 {
+                let _ = write!(f,"-");
+            }
+
+            let _ = write!(f,"{}", to_display_name(walked_path.last().unwrap().0));
+
+            if let None = entry{
+                //this is leaf node
+                return;
+            }
+
+            let mut first = true;
+
+            let children = entry.unwrap();
+
+            for (idx,name_id) in children.iter().enumerate(){
+                {
+                    let mut temp = walked_path.clone();
+                    temp.push((name_id.0,name_id.1,idx==children.len()-1));
+                    self.recurisve_walk(&temp, !first, f);
+                }
+                first = false;
+            }
     }
 
-    fn set_children(&mut self, root: &PathU8, children: &Vec<String>) {
-        assert!(self.check_dir_exists(root));
+    pub fn new(limit: usize) -> ArchiveCache<'static> {
+        let mut ret = ArchiveCache {
+            file_cache: SizedLru::new(limit),
+            dir_tree: HashMap::new(),
+            archive: HashMap::new()
+        };
 
-        let mut ids = std::vec::Vec::new();
+        let virtual_root_path = &PathU8::from(VIRTUAL_ROOT_PATH);
+        let virtual_root_id = path_to_id(virtual_root_path);
 
-        for name in children.iter() {
-            let mut temp_path = root.clone();
+        ret.dir_tree.insert(virtual_root_id,HashMap::new());
 
-            temp_path.push(name.clone());
-
-            ids.push(path_to_id(&temp_path));
-        }
-
-        let node_id = &path_to_id(root);
-        assert!(!self.dir_tree.contains_key(node_id));
-
-        self.dir_tree
-            .insert(node_id.clone(), (children.clone(), ids));
+        return ret;
     }
 
     fn remove_by_path(&mut self, path: &PathU8) {
@@ -148,8 +224,8 @@ impl CacheFsTree {
                 return;
             }
 
-            for id in entry.unwrap().1.iter() {
-                ids.push(id.clone());
+            for (_,node_id) in entry.unwrap().iter() {
+                ids.push(node_id.clone());
             }
         }
 
@@ -158,7 +234,7 @@ impl CacheFsTree {
         }
 
         self.dir_tree.remove(node_id);
-        self.archive_readers.remove(node_id);
+        self.archive.remove(node_id);
     }
 
     fn check_dir_exists(&mut self, path: &PathU8) -> bool {
@@ -187,7 +263,9 @@ impl CacheFsTree {
         }
 
         if let Some(children) = self.dir_tree.get(path) {
-            return Some(NodeContents::Dir(&children.0));
+
+            let ret = Vec::from_iter(children.keys());
+            return Some(NodeContents::Dir(ret));
         }
 
         // second test if this is inside a existing archive
@@ -195,9 +273,36 @@ impl CacheFsTree {
         return None;
     }
 
-    pub fn set_archive(&mut self, path: &PathU8, archive_path:&PathU8 ) -> Option<libarchive::error::ArchiveError>{
+    fn grow_under(&mut self, this_root: &PathU8,path : &PathU8) {
 
-        let node_id  = path_to_id(path);
+        let mut parent = this_root.clone();
+
+        for comp in path.iter(){
+
+            let full_path = parent.join(comp);
+
+            let parent_id = path_to_id(&parent);
+
+            let entry = self.dir_tree.entry(parent_id).or_insert(HashMap::new());
+
+
+            let utf8 = String::from(comp.to_str().unwrap());
+            if entry.contains_key(&utf8) {
+                parent = full_path;
+                continue;
+            }
+
+            let node_id = path_to_id(&full_path);
+
+            entry.insert(utf8,node_id);
+
+            parent = full_path;
+        }
+    }
+
+    pub fn set_archive<'a>(&'a mut self, virtual_path: &PathU8, archive_path:&PathU8 ) -> Option<std::io::Error>{
+
+        let node_id  = path_to_id(virtual_path);
 
         assert!(!self.file_cache.contains_key(&node_id));
 
@@ -208,52 +313,46 @@ impl CacheFsTree {
 
         //first time read
         //
-        let mut builder = Builder::new();
-
-        builder.support_format(libarchive::archive::ReadFormat::All).ok();
-        builder.support_filter(libarchive::archive::ReadFilter::All).ok();
-
-
-        let res = builder.open_file(archive_path);
-
-        if res.is_err() {
-            return res.err();
-        }
-
-
-        let mut reader = res.unwrap();
-
-        loop{
-        
-            let header = reader.next_header();
-            if header.is_none() {
-                break;
-            }
-
-            let e= header.unwrap();
-
-            let path = e.pathname();
-            match e.filetype(){
-                libarchive::archive::FileType::RegularFile=>{
-                    print!("file {}\n",path);
-                },
-                libarchive::archive::FileType::Directory=>{
-                    print!("dir {}\n",path);
-                },
-                _=>{}
-            };
-
-
-        }
 
         //list files in archive
+        //
+        //
+        let ext = archive_path.extension().unwrap().to_str().unwrap().to_owned().to_lowercase();
 
-        let entry =reader.entry();
+        let of = std::fs::File::open(archive_path);
 
+        if of.is_err() {
+            return of.err();
+        }
 
-        self.archive_readers.insert(path.clone(), Box::new(reader));
+        let archive = Zip::new(of.unwrap());
 
+        if archive.is_err(){
+            return archive.err();
+        }
 
+        
+        let mut res = Box::new(archive.unwrap());
+
+        let entries = res.list();
+
+        if entries.is_err() {
+            return entries.err();
+        }
+
+        for f in entries.unwrap(){
+            self.grow_under(virtual_path,&PathU8::from(f));
+        }
+       
+
+        let virtual_root_path = &PathU8::from(VIRTUAL_ROOT_PATH);
+        let virtual_root_id:NodeId = path_to_id(virtual_root_path).clone();
+
+        let children = self.dir_tree.get_mut(&virtual_root_id).unwrap();
+
+        children.insert(String::from(virtual_path.to_str().unwrap()),node_id);
+
+        self.archive.insert(virtual_path.clone(), res);
 
         return None;
     }
@@ -265,20 +364,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn internal() {
-        let mut tree = CacheFsTree::new(1000);
+    fn test_read() {
+        let mut tree = ArchiveCache::new(1000);
 
-        let p = tree.set_archive(&PathU8::from("/"),&PathU8::from("sdf.zip"));
-
-        assert!(!p.is_none());
-
+        assert!(!tree.dir_tree.is_empty());
+        
         let mut d = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     
         d.push("tests/logtrail-6.6.1-0.1.31.zip");
 
-        let r = tree.set_archive(&PathU8::from("/"),&d);
+        let r = tree.set_archive(&PathU8::from(""),&d);
 
-        assert!(r.is_none());
+        print!("{}",tree.to_string());
 
     }
+
 }

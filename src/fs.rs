@@ -1,7 +1,5 @@
 extern crate libarchive;
 
-use libarchive::reader::Builder;
-use libarchive::reader::Reader;
 
 use super::cache::CacheFsTree;
 use super::cache::PathU8;
