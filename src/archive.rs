@@ -11,47 +11,24 @@ use zip::read::ZipArchive;
 
 
 
-pub trait ReadAndSeek : Read + Seek{
-}
 
-impl ReadAndSeek for std::fs::File{
-}
 
-pub trait Archive <'a>{
+pub trait Archive{
 
     fn list(&mut self )-> std::io::Result<Vec<String>>;
 
-    fn entry(&'a mut self, path : &String)-> std::io::Result<&'a ReadAndSeek>;
+    fn entry<'a>(&'a mut self, path : &String)-> std::io::Result<Box<Read+'a>>;
 }
 
 struct WrappedZip<'a> (zip::read::ZipFile<'a>);
 
-pub struct Zip <'a,T: ReadAndSeek>{
-
-    ar : Box<zip::ZipArchive<T> >,
-    str_file_map: HashMap<String,WrappedZip<'a> >
-}
-
-impl <'a> Seek for WrappedZip<'a>{
- fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64>{
-     Ok(0)
- }
-}
-
-impl <'a> Read for WrappedZip<'a>{
-
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize>{
-        Ok(0)
-    }
+pub struct Zip <T: Seek + Read>{
+    ar : Box<zip::ZipArchive<T> >
 }
 
 
-impl <'a>ReadAndSeek for WrappedZip<'a>{
 
-}
-
-
-impl <'a,T:ReadAndSeek > Archive<'a> for Zip<'a,T>{
+impl <T: Seek + Read> Archive for Zip<T>{
 
     fn list(&mut self )-> std::io::Result<Vec<String>>{
 
@@ -66,29 +43,26 @@ impl <'a,T:ReadAndSeek > Archive<'a> for Zip<'a,T>{
         return Ok(ret);
     }
     
-    fn entry(&'a mut self, path : &String)->std::io::Result<&'a ReadAndSeek>{
+    fn entry<'a>(&'a mut self, path : &String)->std::io::Result<Box<Read +'a>> {
 
-        let temp : zip::read::ZipFile<'a> = self.ar.by_name(path)?;
+        let temp = self.ar.by_name(path)?;
 
-        self.str_file_map.insert(path.clone(),WrappedZip(temp));
+        let wrapped: Box<Read +'a> = Box::new(temp);
 
-        let ret : &WrappedZip<'a> = self.str_file_map.get(path).unwrap();
-
-        return Ok(ret);
+        return Ok(wrapped);
     }
 }
 
-impl <'a,T :ReadAndSeek> Zip <'a,T> {
+impl <T :Read + Seek> Zip <T> {
 
-    pub fn new (r : T)-> std::io::Result<Zip<'a,T>>
+    pub fn new (r : T)-> std::io::Result<Zip<T>>
     {
 
 
         let ar = zip::ZipArchive::new(r)?;
 
         let ret = Zip{
-            ar:Box::new(ar),
-            str_file_map: HashMap::new()
+            ar:Box::new(ar)
         };
 
         Ok(ret)

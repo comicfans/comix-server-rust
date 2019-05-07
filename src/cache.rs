@@ -1,12 +1,12 @@
 extern crate lru;
+extern crate tree_magic;
 
 use std::string::String;
 use std::vec::Vec;
 use std::collections::{HashMap,HashSet};
 use std::fmt::{Display, Formatter};
 use std::iter::FromIterator;
-
-
+use std::hash::{Hash, Hasher};
 
 
 use lru::LruCache;
@@ -20,10 +20,11 @@ pub type Binary = std::vec::Vec<u8>;
 
 const VIRTUAL_ROOT_PATH: &str = "*virtual_root*";
 
-type NodeId = PathU8;
+type NodeId = u64;
 
 fn path_to_id(path: &PathU8) -> NodeId {
-    return path.clone();
+    let s = std::collections::hash_map::DefaultHasher::new();
+    s.finish()
 }
 
 struct SizedLru {
@@ -41,11 +42,11 @@ impl SizedLru {
         }
     }
 
-    fn contains_key(&self, key: &PathU8) -> bool {
+    fn contains_key(&self, key: &NodeId) -> bool {
         self.lru.contains(key)
     }
 
-    fn put(&mut self, key: &PathU8, binary: Binary) {
+    fn put(&mut self, key: &NodeId, binary: Binary) {
         assert!(self.lru.get(key).is_none());
 
         self.size += binary.len();
@@ -57,7 +58,7 @@ impl SizedLru {
         }
     }
 
-    fn get(&mut self, key: &PathU8) -> Option<&Binary> {
+    fn get(&mut self, key: &NodeId) -> Option<&Binary> {
         self.lru.get(key)
     }
 
@@ -96,13 +97,13 @@ impl SizedLru {
     }
 }
 
-pub struct ArchiveCache<'a>{
+pub struct ArchiveCache{
     file_cache: SizedLru,
     dir_tree: HashMap<NodeId, HashMap<String,NodeId>>,
-    archive: HashMap<NodeId, Box<dyn Archive<'a> > >
+    archive_cache: LruCache<NodeId,Box<dyn Archive>>
 }
 
-impl Display for ArchiveCache<'static> {
+impl Display for ArchiveCache{
     fn fmt(&self, f: &mut Formatter)->std::fmt::Result<> {
 
         let virtual_root_path = PathU8::from(VIRTUAL_ROOT_PATH);
@@ -129,7 +130,7 @@ fn to_display_name(v: &String)->String{
     return v.clone();
 }
 
-impl ArchiveCache<'static> {
+impl ArchiveCache{
 
     fn recurisve_walk (&self, walked_path: &Vec<(&String,&NodeId,bool)>, from_sibling: bool,f: &mut Formatter)
         {
@@ -191,11 +192,11 @@ impl ArchiveCache<'static> {
             }
     }
 
-    pub fn new(limit: usize) -> ArchiveCache<'static> {
+    pub fn new(binary_limit: usize, archive_limit: usize) -> ArchiveCache{
         let mut ret = ArchiveCache {
-            file_cache: SizedLru::new(limit),
+            file_cache: SizedLru::new(binary_limit),
             dir_tree: HashMap::new(),
-            archive: HashMap::new()
+            archive_cache: LruCache::new(archive_limit)
         };
 
         let virtual_root_path = &PathU8::from(VIRTUAL_ROOT_PATH);
@@ -234,7 +235,7 @@ impl ArchiveCache<'static> {
         }
 
         self.dir_tree.remove(node_id);
-        self.archive.remove(node_id);
+        self.archive_cache.pop(node_id);
     }
 
     fn check_dir_exists(&mut self, path: &PathU8) -> bool {
@@ -255,22 +256,64 @@ impl ArchiveCache<'static> {
         self.file_cache.put(&node_id, bytes);
     }
 
-    pub fn get(&mut self, path: &PathU8) -> Option<NodeContents> {
+    pub fn quick_try(&mut self, full_path: &PathU8) -> Option<NodeContents> {
 
-        // first test cache hit
-        if let Some(binary) = self.file_cache.get(path) {
-            return Some(NodeContents::File(binary));
-        }
+        let node_id = path_to_id(full_path);
 
-        if let Some(children) = self.dir_tree.get(path) {
+        //dir cache take higher than file 
+        //because we may save archive 
+        if let Some(children) = self.dir_tree.get(&node_id) {
 
             let ret = Vec::from_iter(children.keys());
             return Some(NodeContents::Dir(ret));
         }
 
-        // second test if this is inside a existing archive
+        if let Some(binary) = self.file_cache.get(&node_id) {
+            return Some(NodeContents::File(binary));
+        }
+
+        
 
         return None;
+    }
+
+    pub fn slow_try(&mut self, virtual_path: &PathU8 ,rel: &PathU8) -> std::io::Result<NodeContents> {
+
+        //we already kown this file under virtual_path (of archive)
+        let archive_virtual_node = path_to_id(virtual_path);
+
+        //this must be in archive cache (that means this function should be 
+        //called after set_archive)
+        assert!(self.archive_cache.contains(&archive_virtual_node));
+        //then we try to access file directly inside this archive
+        //
+        {
+            let mut binary: Vec<u8> = Vec::new();
+
+            {
+                let ar = self.archive_cache.get_mut(&archive_virtual_node).unwrap();
+                let mut res = ar.entry(&String::from(rel.to_str().unwrap()))?;
+                res.read_to_end(&mut binary)?;
+            }
+
+
+            //test if file is image
+            let mime= tree_magic::from_u8(&binary);
+            if mime.starts_with("image") {
+                //this is image
+                let full_path = virtual_path.join(rel);
+                self.set_binary(&full_path,binary);
+                let ret = self.file_cache.get(&path_to_id(&full_path)).unwrap();
+                return Ok(NodeContents::File(ret));
+            }
+
+            if mime.starts_with("xarchive") {
+                //this is archive again
+            }
+
+        }
+
+        return Err(std::io::Error::new(std::io::ErrorKind::NotFound,"bad"));
     }
 
     fn grow_under(&mut self, this_root: &PathU8,path : &PathU8) {
@@ -352,7 +395,7 @@ impl ArchiveCache<'static> {
 
         children.insert(String::from(virtual_path.to_str().unwrap()),node_id);
 
-        self.archive.insert(virtual_path.clone(), res);
+        self.archive_cache.put(virtual_root_id, res);
 
         return None;
     }
@@ -371,7 +414,7 @@ mod tests {
     
         d.push("tests/logtrail-6.6.1-0.1.31.zip");
 
-        let mut tree = ArchiveCache::new(1000);
+        let mut tree = ArchiveCache::new(1000,10);
 
         assert!(!tree.dir_tree.is_empty());
 
