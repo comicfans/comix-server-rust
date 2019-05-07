@@ -78,7 +78,7 @@ impl <'a,T:ReadAndSeek > Archive<'a> for Zip<'a,T>{
     }
 }
 
-impl <'a,T :ReadAndSeek> Zip <'_,T> {
+impl <'a,T :ReadAndSeek> Zip <'a,T> {
 
     pub fn new (r : T)-> std::io::Result<Zip<'a,T>>
     {

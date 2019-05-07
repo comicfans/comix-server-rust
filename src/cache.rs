@@ -99,7 +99,7 @@ impl SizedLru {
 pub struct ArchiveCache<'a>{
     file_cache: SizedLru,
     dir_tree: HashMap<NodeId, HashMap<String,NodeId>>,
-    archive: HashMap<NodeId, Box<Archive<'a> + 'a > >
+    archive: HashMap<NodeId, Box<dyn Archive<'a> > >
 }
 
 impl Display for ArchiveCache<'static> {
@@ -300,7 +300,7 @@ impl ArchiveCache<'static> {
         }
     }
 
-    pub fn set_archive<'a>(&'a mut self, virtual_path: &PathU8, archive_path:&PathU8 ) -> Option<std::io::Error>{
+    pub fn set_archive(&mut self, virtual_path: &PathU8, archive_path: &PathU8 ) -> Option<std::io::Error>{
 
         let node_id  = path_to_id(virtual_path);
 
@@ -365,15 +365,17 @@ mod tests {
 
     #[test]
     fn test_read() {
-        let mut tree = ArchiveCache::new(1000);
 
-        assert!(!tree.dir_tree.is_empty());
         
         let mut d = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     
         d.push("tests/logtrail-6.6.1-0.1.31.zip");
 
-        let r = tree.set_archive(&PathU8::from(""),&d);
+        let mut tree = ArchiveCache::new(1000);
+
+        assert!(!tree.dir_tree.is_empty());
+
+        let r = tree.set_archive(&PathU8::from(""),&d.clone());
 
         print!("{}",tree.to_string());
 
