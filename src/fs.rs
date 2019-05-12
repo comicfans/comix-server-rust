@@ -1,45 +1,34 @@
-extern crate libarchive;
-
-
-use super::cache::CacheFsTree;
+use super::cache::ArchiveCache;
 use super::cache::PathU8;
-use super::cache::NodeContents;
 
-use notify::{RecommendedWatcher, Watcher, RecursiveMode};
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::sync::mpsc::channel;
 use std::time::Duration;
+use std::{fs, fs::File, io::BufReader};
 
+use std::io::{Error, ErrorKind, Read, Write};
 
-fn prefix_virtual_root (input : &PathU8) -> PathU8 {
+pub const DEFAULT_MEM_LIMIT: usize = 256 * 1024 * 1024;
+pub const DEFAULT_ARCHIVE_LIMIT: usize = 20;
 
-    if cfg!(windows) {
-
-        let with_virtual_root = PathU8::new(); 
-        return with_virtual_root;
-    }
-    
-
-}
-
-
-pub const DEFAULT_LIMIT : usize = 256 * 1024 * 1024;
-
-pub fn watch(rwlock : &mut std::sync::RwLock<CacheFsTree> ){
+pub fn watch(rwlock: &mut std::sync::RwLock<ArchiveCache>) {
     // Create a channel to receive the events.
     let (tx, rx) = channel();
 
     // Automatically select the best implementation for your platform.
     // You can also access each implementation directly e.g. INotifyWatcher.
-    let mut watcher : Result<RecommendedWatcher, notify::Error> = Watcher::new(tx, Duration::from_secs(2));
+    let mut watcher: Result<RecommendedWatcher, notify::Error> =
+        Watcher::new(tx, Duration::from_secs(2));
 
     if let Err(_) = watcher {
         return;
     }
 
-
     // Add a path to be watched. All files and directories at that path and
     // below will be monitored for changes.
-    let res = watcher.unwrap().watch("/home/comicfans/Downloads", RecursiveMode::Recursive);
+    let res = watcher
+        .unwrap()
+        .watch("/home/comicfans/Downloads", RecursiveMode::Recursive);
 
     if res.is_err() {
         return;
@@ -55,110 +44,150 @@ pub fn watch(rwlock : &mut std::sync::RwLock<CacheFsTree> ){
     }
 }
 
-pub struct Fs{
-    root : std::path::PathBuf,
-    rwlock: std::sync::RwLock<CacheFsTree>,
-    watch_thread : std::thread::JoinHandle<()>,
-    ar_handle : None
-
+pub struct Fs {
+    root: std::path::PathBuf,
+    rwlock: std::sync::RwLock<bool>,
+    cache: ArchiveCache,
+    //watch_thread: std::thread::JoinHandle<()>,
 }
 
+impl Fs {
+    fn changed(&mut self, path: &PathU8) {
+        let res = path.strip_prefix(self.root.clone());
 
-
-impl Fs{
-
-    pub fn changed(self,path : &PathU8){
-
-        let mut cache = self.rwlock.write().unwrap();
-
-        cache.remove(path);
+        if let Ok(rel) = res {
+            self.cache.invalid_path(&PathU8::from(rel));
+        }
     }
 
-    pub fn new(path: &PathU8, limit :usize)->Result<Fs>{
+    pub fn new(path: &PathU8, memory_limit: usize, archive_limit: usize) -> std::io::Result<Fs> {
+        let abs_root = std::fs::canonicalize(path)?;
 
-        
-        let abs_root = std::fs::cancanlize(path);
-
-        let mut ret = Fs{
+        let ret = Fs {
             root: abs_root,
-            rwlock:std::sync::RwLock::new(CacheFsTree::new(limit)),
-            watch_thread: std::thread::spawn(||{
-            })
+            rwlock: std::sync::RwLock::new(false),
+            cache: ArchiveCache::new(memory_limit, archive_limit),
+            //   watch_thread: std::thread::spawn(|| {}),
         };
 
+        //ret.watch_thread = std::thread::spawn(|| watch(&mut ret.rwlock));
 
-
-                
-        ret.watch_thread = std::thread::spawn(||{watch(&mut ret.rwlock)});
-
-
-        //access root . root is special since it can be virtual root of all 
+        //access root . root is special since it can be virtual root of all
         //partition driver under windows
-        
-        let _=ret.access(ret.root ,PathU8::from(""))?;
 
-        return ret;
-        
+        return Ok(ret);
     }
 
-    fn access_fs <W : std::io::Write>(&mut self, relative: &PathU8)->Result<NodeContents>{
+    fn try_access_direct(&mut self, path: &PathU8, w: &mut Write) -> std::io::Result<usize> {
+        let mut try_path = self.root.join(path);
 
-        let fullpath = self.root.join(relative);
+        let mut left = PathU8::from("");
 
-        let attr = std::fs::metadata(fullpath)?;
-        
-        if attr.is_dir() {
+        let mut first = true;
 
-            let children = std::vec::Vec::new();
+        for comp in path.iter() {
+            let attr = std::fs::metadata(try_path.clone());
 
-            for entry in fs::read_dir(dir)? {
-                let entry = entry?;
-                children.push(entry.file_name());
+            if attr.is_err() {
+                //can not read file attr
+                //no such file , or no permission
+                //just continue
+                first = false;
+                try_path.pop();
+                left = PathU8::from(comp).join(left);
+                continue;
             }
 
-            let cache = self.rwlock.write().unwrap();
+            // has attr
 
-            cache.set_children(relative, children);
+            if first & attr.unwrap().is_dir() {
+                //only first try to test if target is dir
+                for entry in fs::read_dir(try_path)? {
+                    let entry = entry?;
 
-            cache.get(relative, w);
+                    w.write_all(entry.file_name().into_string().unwrap().as_bytes())?;
+                    w.write_all(b"\n")?;
+                }
+                return Ok(0);
+            }
 
-            return;
-        }
+            if !first {
+                try_path.pop();
+                left = PathU8::from(comp).join(left);
+            }
 
+            // is file
+            // first test if this is image file
+            //
 
-        // is file
-        // first test if this is image file
-        
-        let supported_image = vec!["jpg","jpeg","bmp","gif","png"];
+            first = false;
 
-        let ext = path.extension_name();
+            // is a file (at previous time)
 
-        // is image file from filesystem, no need to cache
-        if ext.ToLower() in supported_image {
+            let archive_exts = vec!["zip", "cbz", "rar", "cbr", "tar", "7z"];
+
+            let ext = try_path.extension().unwrap().to_str();
+
+            //no ext, try to open as archive
+            if ext.is_none() || archive_exts.contains(&ext.unwrap()) {
+                let res = self.cache.set_archive(path, &try_path)?;
+
+                if left.to_str().unwrap().is_empty() {
+                    return res.write_to(w);
+                }
+
+                match self.cache.get(&left) {
+                    Err(er) => {
+                        return Err(er);
+                    }
+                    Ok(contents) => {
+                        return contents.write_to(w);
+                    }
+                }
+            }
+
+            // is image file from filesystem, no need to cache
             let file = File::open(path)?;
-            let reader = BufReader::new(file);
-            writer.write(reader.ReadAll());
-            return;
+
+            let mut buf: Vec<u8> = Vec::new();
+            BufReader::new(file).read_to_end(&mut buf)?;
+
+            w.write_all(&buf)?;
+            return Ok(0);
         }
 
-
-        // try to open as archive 
-        return self.rwlock.write().unwrap().set_archive( relative,fullpath);
+        return Err(Error::new(
+            ErrorKind::NotFound,
+            path.to_str().unwrap().to_owned() + "not matched in filesystem",
+        ));
     }
-    
 
-    pub fn read <W : std::io::Write>(self,path: &PathU8, writer: &mut writer){
+    pub fn read<W: std::io::Write>(
+        &mut self,
+        path: &PathU8,
+        writer: &mut W,
+    ) -> std::io::Result<usize> {
+        let canonicalized = std::fs::canonicalize(path)?;
 
-        let res = self.cache.get(path);
-        if res==Ok {
-            return res;
+        if path.is_absolute() {
+            return Err(Error::new(
+                ErrorKind::NotFound,
+                "can not access absolute path".to_owned() + path.to_str().unwrap(),
+            ));
+        }
+
+        //test cache first
+
+        let res = self.cache.quick_try(&canonicalized);
+
+        if let Some(node_contents) = res {
+            return node_contents.write_to(writer);
         }
 
         //no such entry, read in fs. file or dir?
         //
         //
-        
-        return self.access(root+path);
-    }
 
+        return self.try_access_direct(path, writer);
+    }
 }

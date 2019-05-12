@@ -12,7 +12,9 @@ dependencies = [
  "lru 0.1.15 (registry+https://github.com/rust-lang/crates.io-index)",
  "magic 0.12.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "notify 4.0.10 (registry+https://github.com/rust-lang/crates.io-index)",
+ "scopeguard 0.3.3 (registry+https://github.com/rust-lang/crates.io-index)",
  "tree_magic 0.2.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "unarr 0.1.0",
  "zip 0.5.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -66,6 +68,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
  "cfg-if 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
+
+[[package]]
+name = "ffi"
+version = "0.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "filetime"
@@ -437,6 +444,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "unarr"
+version = "0.1.0"
+dependencies = [
+ "unarr_sys 0.1.0",
+]
+
+[[package]]
+name = "unarr_sys"
+version = "0.1.0"
+dependencies = [
+ "ffi 0.0.2 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.2.51 (registry+https://github.com/rust-lang/crates.io-index)",
+]
+
+[[package]]
 name = "walkdir"
 version = "2.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -514,6 +536,7 @@ dependencies = [
 "checksum cc 1.0.36 (registry+https://github.com/rust-lang/crates.io-index)" = "a0c56216487bb80eec9c4516337b2588a4f2a2290d72a1416d930e4dcdb0c90d"
 "checksum cfg-if 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)" = "11d43355396e872eefb45ce6342e4374ed7bc2b3a502d1b28e36d6e23c05d1f4"
 "checksum crc32fast 1.2.0 (registry+https://github.com/rust-lang/crates.io-index)" = "ba125de2af0df55319f41944744ad91c71113bf74a4646efff39afe1f6842db1"
+"checksum ffi 0.0.2 (registry+https://github.com/rust-lang/crates.io-index)" = "adcf808a1837153eaf7efe795ccc246b564801a7a20402619708eb5e124ee3be"
 "checksum filetime 0.2.4 (registry+https://github.com/rust-lang/crates.io-index)" = "a2df5c1a8c4be27e7707789dc42ae65976e60b394afd293d1419ab915833e646"
 "checksum fixedbitset 0.1.9 (registry+https://github.com/rust-lang/crates.io-index)" = "86d4de0081402f5e88cdac65c8dcdcc73118c1a7a465e2a05f0da05843a8ea33"
 "checksum fnv 1.0.6 (registry+https://github.com/rust-lang/crates.io-index)" = "2fad85553e09a6f881f739c29f0b00b0f01357c743266d478b68951ce23285f3"

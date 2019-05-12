@@ -1,35 +1,11 @@
 //mod fs;
 
 mod cache;
-
-mod archive;
+mod fs;
 
 fn main() {
-    /*
-    let mut c = cache::CacheFsTree::new(123);
-
-    let k = c.get(&cache::PathU8::new());
-
-    let a = std::path::PathBuf::from("");
-
-    let ch = a.ancestors();
-
-    //let fs= fs::Fs::new(cache::PathU8::new(), fs::DEFAULT_LIMIT);
-    //
-    //
-
-    //println!("{}",std::path::PathBuf::new().is_empty());
-    ch.for_each(|x| println!("{:?}", x));
-
-    println!(
-        "{}",
-        std::path::PathBuf::new() == std::path::PathBuf::from("")
-    );
-    println!("{}", std::path::PathBuf::new().is_relative());
-    println!("{}", std::path::PathBuf::new().is_absolute());
-
-    //let _tree = cache::CacheFsTree::new(256 * 1024 * 1024);
-    */
+    
+    let filesystem = fs::Fs::new(&cache::PathU8::from("."),fs::DEFAULT_MEM_LIMIT,fs::DEFAULT_ARCHIVE_LIMIT);
 
     /*
     let server = http::new();

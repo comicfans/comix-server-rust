@@ -1,18 +1,17 @@
 extern crate lru;
-extern crate tree_magic;
+extern crate unarr;
 
+use std::collections::HashMap;
+use std::fmt::{Display, Formatter};
+use std::hash::Hasher;
+use std::io::{Error, ErrorKind, Read, Write};
+use std::iter::FromIterator;
 use std::string::String;
 use std::vec::Vec;
-use std::collections::{HashMap,HashSet};
-use std::fmt::{Display, Formatter};
-use std::iter::FromIterator;
-use std::hash::{Hash, Hasher};
-
 
 use lru::LruCache;
 
-use super::archive::Archive;
-use super::archive::Zip;
+use unarr::{ArArchive, ArEntry, ArStream};
 
 pub type PathU8 = std::path::PathBuf;
 
@@ -22,7 +21,7 @@ const VIRTUAL_ROOT_PATH: &str = "*virtual_root*";
 
 type NodeId = u64;
 
-fn path_to_id(path: &PathU8) -> NodeId {
+fn path_to_id(_path: &PathU8) -> NodeId {
     let s = std::collections::hash_map::DefaultHasher::new();
     s.finish()
 }
@@ -46,7 +45,7 @@ impl SizedLru {
         self.lru.contains(key)
     }
 
-    fn put(&mut self, key: &NodeId, binary: Binary) {
+    fn put(&mut self, key: &NodeId, binary: Binary) -> &Binary {
         assert!(self.lru.get(key).is_none());
 
         self.size += binary.len();
@@ -56,6 +55,8 @@ impl SizedLru {
         if self.size > self.limit {
             self.recycle();
         }
+
+        return self.lru.get(key).unwrap();
     }
 
     fn get(&mut self, key: &NodeId) -> Option<&Binary> {
@@ -97,24 +98,24 @@ impl SizedLru {
     }
 }
 
-pub struct ArchiveCache{
+pub struct ArchiveCache {
     file_cache: SizedLru,
-    dir_tree: HashMap<NodeId, HashMap<String,NodeId>>,
-    archive_cache: LruCache<NodeId,Box<dyn Archive>>
+    dir_tree: HashMap<NodeId, HashMap<String, NodeId>>,
+    //archive , all name=>ArEntry map, is_nested
+    archive_cache: LruCache<NodeId, (ArArchive, HashMap<String, ArEntry>, bool)>,
 }
 
-impl Display for ArchiveCache{
-    fn fmt(&self, f: &mut Formatter)->std::fmt::Result<> {
-
+impl Display for ArchiveCache {
+    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         let virtual_root_path = PathU8::from(VIRTUAL_ROOT_PATH);
         let virtual_root_id = path_to_id(&virtual_root_path);
 
         let root = String::from(VIRTUAL_ROOT_PATH);
-        let walked = Vec::from(vec![(&root,&virtual_root_id,true)]);
+        let walked = Vec::from(vec![(&root, &virtual_root_id, true)]);
 
         self.recurisve_walk(&walked, true, f);
 
-        write!(f,"\n")
+        write!(f, "\n")
     }
 }
 
@@ -123,92 +124,120 @@ pub enum NodeContents<'a> {
     Dir(Vec<&'a String>),
 }
 
-fn to_display_name(v: &String)->String{
+impl<'a> NodeContents<'a> {
+    pub fn write_to(&self, w: &mut Write) -> std::io::Result<usize> {
+        match self {
+            NodeContents::File(bin) => {
+                w.write_all(bin)?;
+                return Ok(0);
+            }
+            NodeContents::Dir(dirs) => {
+                for d in dirs {
+                    w.write_all(d.as_bytes())?;
+
+                    w.write_all(b"\n")?;
+                }
+                return Ok(0);
+            }
+        }
+    }
+}
+
+fn to_display_name(v: &String) -> String {
     if v.is_empty() {
         return String::from("*EMPTY*");
     }
     return v.clone();
 }
 
-impl ArchiveCache{
+impl ArchiveCache {
+    fn recurisve_walk(
+        &self,
+        walked_path: &Vec<(&String, &NodeId, bool)>,
+        from_sibling: bool,
+        f: &mut Formatter,
+    ) {
+        assert!(walked_path.len() >= 1);
 
-    fn recurisve_walk (&self, walked_path: &Vec<(&String,&NodeId,bool)>, from_sibling: bool,f: &mut Formatter)
-        {
+        let this_node = &walked_path[walked_path.len() - 1];
 
-            assert!(walked_path.len()>=1);
+        let entry = self.dir_tree.get(this_node.1);
 
-            let this_node = &walked_path[walked_path.len()-1];
+        if from_sibling {
+            //preserve space of parent
+            let _ = write!(f, "\n");
 
-            let entry = self.dir_tree.get(this_node.1);
+            for (idx, tuple) in walked_path.split_last().unwrap().1.iter().enumerate() {
+                let name = to_display_name(tuple.0);
+                let next_child_is_last = walked_path[idx + 1].2;
 
-            if from_sibling {
-                //preserve space of parent
-                let _ = write!(f,"\n");
+                let this_is_last_parent = idx != walked_path.len() - 2;
 
-                for (idx,tuple) in walked_path.split_last().unwrap().1.iter().enumerate(){
+                let _ = write!(f, "{}", " ".repeat(name.len() - 1));
 
-                    let name = to_display_name(tuple.0);
-                    let next_child_is_last = walked_path[idx+1].2;
+                if !next_child_is_last {
+                    let _ = write!(f, "|");
+                } else {
+                    let _ = write!(f, " ");
+                }
 
-                    let this_is_last_parent = idx != walked_path.len()-2;
-
-                    let _ = write!(f,"{}"," ".repeat(name.len()-1));
-
-
-                    if !next_child_is_last{
-                        let _ = write!(f,"|");
-                    }else{
-                        let _ = write!(f," ");
-                    }
-
-                    if this_is_last_parent {
-                        let _ = write!(f," ");
-                    }
+                if this_is_last_parent {
+                    let _ = write!(f, " ");
                 }
             }
+        }
 
-            if walked_path.len() !=1 {
-                let _ = write!(f,"-");
+        if walked_path.len() != 1 {
+            let _ = write!(f, "-");
+        }
+
+        let _ = write!(f, "{}", to_display_name(walked_path.last().unwrap().0));
+
+        if let None = entry {
+            //this is leaf node
+            return;
+        }
+
+        let mut first = true;
+
+        let children = entry.unwrap();
+
+        for (idx, name_id) in children.iter().enumerate() {
+            {
+                let mut temp = walked_path.clone();
+                temp.push((name_id.0, name_id.1, idx == children.len() - 1));
+                self.recurisve_walk(&temp, !first, f);
             }
-
-            let _ = write!(f,"{}", to_display_name(walked_path.last().unwrap().0));
-
-            if let None = entry{
-                //this is leaf node
-                return;
-            }
-
-            let mut first = true;
-
-            let children = entry.unwrap();
-
-            for (idx,name_id) in children.iter().enumerate(){
-                {
-                    let mut temp = walked_path.clone();
-                    temp.push((name_id.0,name_id.1,idx==children.len()-1));
-                    self.recurisve_walk(&temp, !first, f);
-                }
-                first = false;
-            }
+            first = false;
+        }
     }
 
-    pub fn new(binary_limit: usize, archive_limit: usize) -> ArchiveCache{
+    pub fn new(binary_limit: usize, archive_limit: usize) -> ArchiveCache {
         let mut ret = ArchiveCache {
             file_cache: SizedLru::new(binary_limit),
             dir_tree: HashMap::new(),
-            archive_cache: LruCache::new(archive_limit)
+            archive_cache: LruCache::new(archive_limit),
         };
 
         let virtual_root_path = &PathU8::from(VIRTUAL_ROOT_PATH);
         let virtual_root_id = path_to_id(virtual_root_path);
 
-        ret.dir_tree.insert(virtual_root_id,HashMap::new());
+        ret.dir_tree.insert(virtual_root_id, HashMap::new());
 
         return ret;
     }
 
-    fn remove_by_path(&mut self, path: &PathU8) {
-        self.remove_by_id(&path_to_id(&path));
+    pub fn invalid_path(&mut self, virtual_path: &PathU8) {
+        let virtual_root_id = path_to_id(&PathU8::from(VIRTUAL_ROOT_PATH));
+
+        let children = self.dir_tree.get(&virtual_root_id).unwrap().clone();
+
+        for key in children.keys() {
+            let prefix: bool = key.starts_with(virtual_path.to_str().unwrap());
+            if prefix {
+                self.remove_by_id(&path_to_id(&PathU8::from(key)));
+            }
+        }
     }
 
     fn remove_by_id(&mut self, node_id: &NodeId) {
@@ -225,7 +254,7 @@ impl ArchiveCache{
                 return;
             }
 
-            for (_,node_id) in entry.unwrap().iter() {
+            for (_, node_id) in entry.unwrap().iter() {
                 ids.push(node_id.clone());
             }
         }
@@ -238,32 +267,25 @@ impl ArchiveCache{
         self.archive_cache.pop(node_id);
     }
 
-    fn check_dir_exists(&mut self, path: &PathU8) -> bool {
-        for i in path.iter() {
-            return true;
-        }
-
-        return false;
-    }
-
-    fn set_binary(&mut self, path: &PathU8, bytes: Binary) {
+    fn set_binary(&mut self, path: &PathU8, bytes: Binary) -> NodeContents {
         let node_id = path_to_id(&path);
 
         assert!(!self.dir_tree.contains_key(&node_id));
 
-        assert!(self.check_dir_exists(path));
+        //the binary to set must be under some dir
+        assert!(self
+            .dir_tree
+            .contains_key(&path_to_id(&path.parent().unwrap().to_path_buf())));
 
-        self.file_cache.put(&node_id, bytes);
+        return NodeContents::File(self.file_cache.put(&node_id, bytes));
     }
 
     pub fn quick_try(&mut self, full_path: &PathU8) -> Option<NodeContents> {
-
         let node_id = path_to_id(full_path);
 
-        //dir cache take higher than file 
-        //because we may save archive 
+        //dir cache take higher than file
+        //because we may save archive
         if let Some(children) = self.dir_tree.get(&node_id) {
-
             let ret = Vec::from_iter(children.keys());
             return Some(NodeContents::Dir(ret));
         }
@@ -272,62 +294,158 @@ impl ArchiveCache{
             return Some(NodeContents::File(binary));
         }
 
-        
-
         return None;
     }
 
-    pub fn slow_try(&mut self, virtual_path: &PathU8 ,rel: &PathU8) -> std::io::Result<NodeContents> {
+    fn slow_try_in_archive(
+        &mut self,
+        virtual_path: &PathU8,
+        rel: &PathU8,
+    ) -> std::io::Result<NodeContents> {
+        assert!(self
+            .dir_tree
+            .contains_key(&path_to_id(&virtual_path.join(rel))));
+        assert!(self
+            .file_cache
+            .contains_key(&path_to_id(&virtual_path.join(rel))));
 
-        //we already kown this file under virtual_path (of archive)
-        let archive_virtual_node = path_to_id(virtual_path);
+        let ar_and_entries = self
+            .archive_cache
+            .get_mut(&path_to_id(virtual_path))
+            .unwrap();
 
-        //this must be in archive cache (that means this function should be 
-        //called after set_archive)
-        assert!(self.archive_cache.contains(&archive_virtual_node));
-        //then we try to access file directly inside this archive
-        //
-        {
-            let mut binary: Vec<u8> = Vec::new();
+        let mut partical_try = rel.clone();
 
-            {
-                let ar = self.archive_cache.get_mut(&archive_virtual_node).unwrap();
-                let mut res = ar.entry(&String::from(rel.to_str().unwrap()))?;
-                res.read_to_end(&mut binary)?;
+        let mut left_path = PathU8::from("");
+
+        let mut first = true;
+        for comp in rel.iter().rev() {
+            if !first {
+                partical_try.pop();
+                left_path.push(comp);
             }
 
+            first = false;
 
-            //test if file is image
-            let mime= tree_magic::from_u8(&binary);
-            if mime.starts_with("image") {
-                //this is image
-                let full_path = virtual_path.join(rel);
-                self.set_binary(&full_path,binary);
-                let ret = self.file_cache.get(&path_to_id(&full_path)).unwrap();
-                return Ok(NodeContents::File(ret));
+            let entry = ar_and_entries
+                .1
+                .entry(partical_try.to_str().unwrap().to_string());
+            let mut binary = Vec::new();
+            match entry {
+                std::collections::hash_map::Entry::Vacant(_) => {
+                    continue;
+                }
+                std::collections::hash_map::Entry::Occupied(kv) => {
+                    let reader = ar_and_entries.0.reader_for(kv.get())?;
+                    if let Err(e) = reader.read_to_end(&mut binary) {
+                        return Err(e);
+                    }
+                }
             }
 
-            if mime.starts_with("xarchive") {
-                //this is archive again
+            //hit a entry in existing archive
+            let mime = tree_magic::from_u8(&binary);
+
+            let is_archive = mime.starts_with("archive");
+
+            if !is_archive {
+                if left_path.to_str().unwrap().is_empty() {
+                    return Ok(NodeContents::File(
+                        self.file_cache.put(&path_to_id(&partical_try), binary),
+                    ));
+                }
+
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    partical_try.to_str().unwrap().to_owned() + "can not be decoded as archive",
+                ));
             }
 
+            // this is archive ,look into it
+
+            let ar = ArArchive::new(ArStream::from_memory(binary), None);
+
+            if ar.is_err() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::NotFound,
+                    partical_try.to_str().unwrap().to_owned() + "can not be decoded as archive",
+                ));
+            }
+
+            if left_path.to_str().unwrap().is_empty() {
+                return self.set_archive_internal(&partical_try, ar.unwrap(), true);
+            }
+
+            return self.slow_try_in_archive(&partical_try, &left_path);
+
+            // have left path, but partical_path is not archive
         }
 
-        return Err(std::io::Error::new(std::io::ErrorKind::NotFound,"bad"));
+        //all path tried, but no matched archive
+
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            "no entry matched ".to_owned()
+                + rel.to_str().unwrap()
+                + " under "
+                + virtual_path.to_str().unwrap(),
+        ));
     }
 
-    fn grow_under(&mut self, this_root: &PathU8,path : &PathU8) {
+    pub fn get(&mut self, path: &PathU8) -> std::io::Result<NodeContents> {
+        {
+            //should quick_try() first, and expose this function only
+            //but rust has bug that early return still extends lifetime
+            //to function scope so we expose quick_try too
+        }
 
+        //try to find in archive
+        //first we need to find matched archive root
+        //due to we support nested archive, we should longest first
+
+        let virtual_root_id = path_to_id(&PathU8::from(VIRTUAL_ROOT_PATH));
+
+        let mut longest_match: Option<PathU8> = None;
+
+        let workaround_rust_nll = self.dir_tree.clone();
+
+        for virtual_path in workaround_rust_nll.get(&virtual_root_id).unwrap().keys() {
+            if path.starts_with(virtual_path) {
+                if longest_match.is_none() {
+                    longest_match = Some(PathU8::from(virtual_path));
+                    continue;
+                }
+
+                if longest_match.as_ref().unwrap().to_str().unwrap() < path.to_str().unwrap() {
+                    longest_match = Some(PathU8::from(virtual_path));
+                }
+            }
+        }
+
+        if longest_match.is_none() {
+            return Err(Error::new(
+                ErrorKind::NotFound,
+                path.to_str().unwrap().to_owned() + "not found",
+            ));
+        }
+
+        //longest path first
+
+        let matched = longest_match.unwrap();
+        let rel = path.strip_prefix(matched.clone()).unwrap();
+
+        return self.slow_try_in_archive(&matched, &PathU8::from(rel));
+    }
+
+    fn grow_under(&mut self, this_root: &PathU8, path: &PathU8) {
         let mut parent = this_root.clone();
 
-        for comp in path.iter(){
-
+        for comp in path.iter() {
             let full_path = parent.join(comp);
 
             let parent_id = path_to_id(&parent);
 
             let entry = self.dir_tree.entry(parent_id).or_insert(HashMap::new());
-
 
             let utf8 = String::from(comp.to_str().unwrap());
             if entry.contains_key(&utf8) {
@@ -337,67 +455,63 @@ impl ArchiveCache{
 
             let node_id = path_to_id(&full_path);
 
-            entry.insert(utf8,node_id);
+            entry.insert(utf8, node_id);
 
             parent = full_path;
         }
     }
 
-    pub fn set_archive(&mut self, virtual_path: &PathU8, archive_path: &PathU8 ) -> Option<std::io::Error>{
+    fn set_archive_internal(
+        &mut self,
+        virtual_path: &PathU8,
+        mut ar: ArArchive,
+        is_nested: bool,
+    ) -> std::io::Result<NodeContents> {
+        let mut entries = HashMap::new();
 
-        let node_id  = path_to_id(virtual_path);
+        for f in ar.iter() {
+            self.grow_under(virtual_path, &PathU8::from(f.name.clone()));
+            entries.insert(f.name.clone(), f);
+        }
+
+        let virtual_root_path = &PathU8::from(VIRTUAL_ROOT_PATH);
+        let virtual_root_id: NodeId = path_to_id(virtual_root_path).clone();
+
+        self.archive_cache
+            .put(virtual_root_id, (ar, entries, is_nested));
+
+        let ret = Vec::from_iter(
+            self.dir_tree
+                .get(&path_to_id(&virtual_path))
+                .unwrap()
+                .keys(),
+        );
+        return Ok(NodeContents::Dir(ret));
+    }
+
+    pub fn set_archive(
+        &mut self,
+        virtual_path: &PathU8,
+        archive_path: &PathU8,
+    ) -> std::io::Result<NodeContents> {
+        let node_id = path_to_id(virtual_path);
 
         assert!(!self.file_cache.contains_key(&node_id));
 
         if self.dir_tree.contains_key(&node_id) {
             //already read. ignore
-            return None;
+            let ret = Vec::from_iter(
+                self.dir_tree
+                    .get(&path_to_id(&virtual_path))
+                    .unwrap()
+                    .keys(),
+            );
+            return Ok(NodeContents::Dir(ret));
         }
 
-        //first time read
-        //
+        let ar = ArArchive::new(ArStream::from_file(archive_path)?, None)?;
 
-        //list files in archive
-        //
-        //
-        let ext = archive_path.extension().unwrap().to_str().unwrap().to_owned().to_lowercase();
-
-        let of = std::fs::File::open(archive_path);
-
-        if of.is_err() {
-            return of.err();
-        }
-
-        let archive = Zip::new(of.unwrap());
-
-        if archive.is_err(){
-            return archive.err();
-        }
-
-        
-        let mut res = Box::new(archive.unwrap());
-
-        let entries = res.list();
-
-        if entries.is_err() {
-            return entries.err();
-        }
-
-        for f in entries.unwrap(){
-            self.grow_under(virtual_path,&PathU8::from(f));
-        }
-       
-
-        let virtual_root_path = &PathU8::from(VIRTUAL_ROOT_PATH);
-        let virtual_root_id:NodeId = path_to_id(virtual_root_path).clone();
-
-        let children = self.dir_tree.get_mut(&virtual_root_id).unwrap();
-
-        children.insert(String::from(virtual_path.to_str().unwrap()),node_id);
-
-        self.archive_cache.put(virtual_root_id, res);
-
-        return None;
+        return self.set_archive_internal(virtual_path, ar, false);
     }
 }
 
@@ -408,20 +522,17 @@ mod tests {
 
     #[test]
     fn test_read() {
-
-        
         let mut d = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    
+
         d.push("tests/logtrail-6.6.1-0.1.31.zip");
 
-        let mut tree = ArchiveCache::new(1000,10);
+        let mut tree = ArchiveCache::new(1000, 10);
 
         assert!(!tree.dir_tree.is_empty());
 
-        let r = tree.set_archive(&PathU8::from(""),&d.clone());
+        let r = tree.set_archive(&PathU8::from(""), &d.clone());
 
-        print!("{}",tree.to_string());
-
+        print!("{}", tree.to_string());
     }
 
 }

@@ -7,5 +7,9 @@ version = "0.1.0"
 lru = "*"
 magic = "*"
 notify = "4.0.0"
+scopeguard = "*"
 tree_magic = "*"
 zip = "*"
+
+[dependencies.unarr]
+path = "/home/comicfans/working/unarr.rs"
