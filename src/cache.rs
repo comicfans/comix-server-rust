@@ -19,11 +19,22 @@ pub type Binary = std::vec::Vec<u8>;
 
 const VIRTUAL_ROOT_PATH: &str = "*virtual_root*";
 
+#[cfg(not(debug_assertions))]
 type NodeId = u64;
 
+#[cfg(debug_assertions)]
+type NodeId = PathU8;
+
 fn path_to_id(_path: &PathU8) -> NodeId {
+
+    #[cfg(debug_assertions)]
+    return _path.clone();
+
+    #[cfg(not(debug_assertions))]{
     let s = std::collections::hash_map::DefaultHasher::new();
     s.finish()
+
+    }
 }
 
 struct SizedLru {
@@ -107,6 +118,21 @@ pub struct ArchiveCache {
 
 impl Display for ArchiveCache {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+
+        #[cfg(debug_assertions)]
+        {
+        for (key,value) in self.dir_tree.iter() {
+
+            write!(f, "{}:\n",key.display())?;
+
+            for name in value.keys(){
+                write!(f, "-{}\n",to_display_name(name))?;
+            }
+
+        }
+        write!(f, "\n")?;
+        }
+
         let virtual_root_path = PathU8::from(VIRTUAL_ROOT_PATH);
         let virtual_root_id = path_to_id(&virtual_root_path);
 
@@ -188,7 +214,11 @@ impl ArchiveCache {
         }
 
         if walked_path.len() != 1 {
-            let _ = write!(f, "-");
+            if from_sibling {
+                let _ = write!(f, "-");
+            } else {
+                let _ = write!(f, "/");
+            }
         }
 
         let _ = write!(f, "{}", to_display_name(walked_path.last().unwrap().0));
@@ -478,7 +508,12 @@ impl ArchiveCache {
         let virtual_root_id: NodeId = path_to_id(virtual_root_path).clone();
 
         self.archive_cache
-            .put(virtual_root_id, (ar, entries, is_nested));
+            .put(virtual_root_id.clone(), (ar, entries, is_nested));
+
+        self.dir_tree.get_mut(&virtual_root_id).unwrap().insert(
+            virtual_path.clone().to_str().unwrap().to_owned(),
+            path_to_id(&virtual_path),
+        );
 
         let ret = Vec::from_iter(
             self.dir_tree

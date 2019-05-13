@@ -4,8 +4,11 @@ mod cache;
 mod fs;
 
 fn main() {
-    
-    let filesystem = fs::Fs::new(&cache::PathU8::from("."),fs::DEFAULT_MEM_LIMIT,fs::DEFAULT_ARCHIVE_LIMIT);
+    let filesystem = fs::Fs::new(
+        &cache::PathU8::from("."),
+        fs::DEFAULT_MEM_LIMIT,
+        fs::DEFAULT_ARCHIVE_LIMIT,
+    );
 
     /*
     let server = http::new();
