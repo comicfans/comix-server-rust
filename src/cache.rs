@@ -26,14 +26,13 @@ type NodeId = u64;
 type NodeId = PathU8;
 
 fn path_to_id(_path: &PathU8) -> NodeId {
-
     #[cfg(debug_assertions)]
     return _path.clone();
 
-    #[cfg(not(debug_assertions))]{
-    let s = std::collections::hash_map::DefaultHasher::new();
-    s.finish()
-
+    #[cfg(not(debug_assertions))]
+    {
+        let s = std::collections::hash_map::DefaultHasher::new();
+        s.finish()
     }
 }
 
@@ -118,19 +117,16 @@ pub struct ArchiveCache {
 
 impl Display for ArchiveCache {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-
         #[cfg(debug_assertions)]
         {
-        for (key,value) in self.dir_tree.iter() {
+            for (key, value) in self.dir_tree.iter() {
+                write!(f, "{}:\n", key.display())?;
 
-            write!(f, "{}:\n",key.display())?;
-
-            for name in value.keys(){
-                write!(f, "-{}\n",to_display_name(name))?;
+                for name in value.keys() {
+                    write!(f, "-{}\n", to_display_name(name))?;
+                }
             }
-
-        }
-        write!(f, "\n")?;
+            write!(f, "\n")?;
         }
 
         let virtual_root_path = PathU8::from(VIRTUAL_ROOT_PATH);

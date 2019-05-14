@@ -4,12 +4,14 @@ edition = "2018"
 name = "archive-cache"
 version = "0.1.0"
 [dependencies]
+crossbeam = "*"
+futures = "*"
+hyper = "*"
+log = "*"
 lru = "*"
 magic = "*"
 notify = "4.0.0"
-scopeguard = "*"
 tree_magic = "*"
-zip = "*"
 
 [dependencies.unarr]
-path = "/home/comicfans/working/unarr.rs"
+path = "/home/wangxinyu/unarr.rs"
