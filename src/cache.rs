@@ -312,14 +312,17 @@ impl ArchiveCache {
         //dir cache take higher than file
         //because we may save archive
         if let Some(children) = self.dir_tree.get(&node_id) {
+            trace!("cache hit dir {:?}", full_path);
             let ret = Vec::from_iter(children.keys());
             return Some(NodeContents::Dir(ret));
         }
 
         if let Some(binary) = self.file_cache.get(&node_id) {
+            trace!("cache hit file {:?}", full_path);
             return Some(NodeContents::File(binary));
         }
 
+        trace!("no cache for {:?}", full_path);
         return None;
     }
 
@@ -328,6 +331,11 @@ impl ArchiveCache {
         virtual_path: &PathU8,
         rel: &PathU8,
     ) -> std::io::Result<NodeContents> {
+
+        trace!("{}",self);
+
+        trace!("slow try archive_root {:?} , rel {:?}", virtual_path, rel);
+
         assert!(self
             .dir_tree
             .contains_key(&path_to_id(&virtual_path.join(rel))));
@@ -493,6 +501,10 @@ impl ArchiveCache {
         mut ar: ArArchive,
         is_nested: bool,
     ) -> std::io::Result<NodeContents> {
+        trace!("added archive as {:?}", virtual_path);
+
+        self.grow_under(&PathU8::from(VIRTUAL_ROOT_PATH),virtual_path);
+
         let mut entries = HashMap::new();
 
         for f in ar.iter() {
@@ -529,6 +541,10 @@ impl ArchiveCache {
 
         assert!(!self.file_cache.contains_key(&node_id));
 
+        //all virtual path must be relative to 'virtual root'
+        assert!(virtual_path.is_relative());
+
+
         if self.dir_tree.contains_key(&node_id) {
             //already read. ignore
             let ret = Vec::from_iter(
@@ -539,6 +555,8 @@ impl ArchiveCache {
             );
             return Ok(NodeContents::Dir(ret));
         }
+
+        debug!("try to open {:?} as archive",archive_path);
 
         let ar = ArArchive::new(ArStream::from_file(archive_path)?, None)?;
 
@@ -553,17 +571,53 @@ mod tests {
 
     #[test]
     fn test_read() {
+
+    
+        simple_logger::init().unwrap();
+
         let mut d = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
         d.push("tests/logtrail-6.6.1-0.1.31.zip");
 
-        let mut tree = ArchiveCache::new(1000, 10);
+        let vec = vec!["ak", "test/logtrail-6.6.1-0.1.31.zip", ""];
 
-        assert!(!tree.dir_tree.is_empty());
+        for p in vec {
+            let mut tree = ArchiveCache::new(1000, 10);
 
-        let r = tree.set_archive(&PathU8::from(""), &d.clone());
+            assert!(!tree.dir_tree.is_empty());
 
-        print!("{}", tree.to_string());
+            let r = tree.set_archive(&PathU8::from(p), &d.clone());
+
+
+            
+           match r.unwrap() {
+               NodeContents::File(_) => {
+                   assert!(false);
+               }
+               NodeContents::Dir(dir) => {
+                   assert_eq!(dir[0], "kibana");
+               }
+           }
+
+
+            let r2 = tree.quick_try(&PathU8::from(p)).unwrap();
+
+            match r2 {
+                NodeContents::File(_) => {
+                    assert!(false);
+                }
+                NodeContents::Dir(dir) => {
+                    assert_eq!(dir[0], "kibana");
+                }
+            }
+
+            println!("{}", tree);
+
+            let mut file = PathU8::from("kibana/logtrail/index.js");
+            
+            let r3= tree.slow_try_in_archive(&PathU8::from(p), &file);
+
+        }
     }
 
 }

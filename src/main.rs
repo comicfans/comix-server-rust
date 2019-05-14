@@ -1,5 +1,7 @@
+extern crate simple_logger;
 //mod fs;
 //
+use cache::PathU8;
 use crossbeam;
 use std::sync;
 
@@ -20,14 +22,12 @@ mod fs;
 type BoxFut = Box<Future<Item = Response<Body>, Error = hyper::Error> + Send>;
 
 fn main() {
-    let res = fs::Fs::new(
-        &cache::PathU8::from("."),
-        fs::DEFAULT_MEM_LIMIT,
-        fs::DEFAULT_ARCHIVE_LIMIT,
-    );
+    simple_logger::init().unwrap();
+
+    let res = fs::Fs::new(&cache::PathU8::from("."));
 
     if res.is_err() {
-        println!("{:?}", res.err());
+        error!("{:?}", res.err());
         std::process::exit(1);
     }
 
@@ -51,12 +51,16 @@ fn main() {
         let fs = filesystem.clone();
 
         service_fn_ok(move |req| {
-
             let path = req.uri().path();
+
+            trace!("access {}", path);
+
+            let rel = PathU8::from(path[1..].to_owned());
+            trace!("convert to rel {:?}", rel);
 
             let mut cursor = std::io::Cursor::new(Vec::new());
 
-            let res = fs.read(&*arc, &cache::PathU8::from(path), &mut cursor);
+            let res = fs.read(&*arc, &cache::PathU8::from(rel), &mut cursor);
 
             if let Ok(_) = res {
                 return Response::new(Body::from(cursor.get_ref().clone()));
@@ -70,7 +74,7 @@ fn main() {
         .serve(new_service)
         .map_err(|e| eprintln!("server error: {}", e));
 
-    println!("Listening on http://{}", addr);
+    info!("Listening on http://{}", addr);
 
     hyper::rt::run(server);
 }
