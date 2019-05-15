@@ -33,7 +33,7 @@ fn main() {
 
     let filesystem = Arc::new(res.unwrap());
 
-    let mut cache = Arc::new(Mutex::new(cache::ArchiveCache::new(100, 100)));
+    let cache = Arc::new(Mutex::new(cache::ArchiveCache::new(100, 100)));
 
     crossbeam::thread::scope(|s| {
         s.spawn(|_| {

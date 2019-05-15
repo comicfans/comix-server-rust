@@ -1,7 +1,6 @@
 extern crate relative_path;
 
-use super::cache::ArchiveCache;
-use super::cache::PathU8;
+use super::cache::{ArchiveCache,is_archive,PathU8,FileOrMem,join_may_empty};
 use relative_path::RelativePathBuf;
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
@@ -28,7 +27,7 @@ impl Fs {
 
         // Automatically select the best implementation for your platform.
         // You can also access each implementation directly e.g. INotifyWatcher.
-        let mut watcher: Result<RecommendedWatcher, notify::Error> =
+        let watcher: Result<RecommendedWatcher, notify::Error> =
             Watcher::new(tx, Duration::from_secs(2));
 
         if let Err(_) = watcher {
@@ -69,7 +68,7 @@ impl Fs {
 
         debug!("fs root {:?}", abs_root);
 
-        let mut ret = Fs { root: abs_root };
+        let ret = Fs { root: abs_root };
 
         //access root . root is special since it can be virtual root of all
         //partition driver under windows
@@ -85,15 +84,26 @@ impl Fs {
         left: &PathU8,
         w: &mut Write,
     ) -> std::io::Result<usize> {
+
+        trace!("try in archive {:?}, as virtual_path {:?}, left {:?}",archive_path, virtual_path,left);
+
         let mut lock = cache.lock().unwrap();
 
         let res = lock.set_archive(virtual_path, &archive_path)?;
 
         if left.to_str().unwrap().is_empty() {
+            trace!("no left, use archive {:?} result",virtual_path);
             return res.write_to(w);
         }
 
-        match lock.get(&left) {
+        match lock.quick_try(&join_may_empty(virtual_path,left)) {
+            Some(result)=>{
+                return result.write_to(w);
+            },
+            _=>{}
+        }
+
+        match lock.slow_try(&join_may_empty(virtual_path,left)) {
             Err(er) => {
                 return Err(er);
             }
@@ -104,6 +114,8 @@ impl Fs {
     }
 
     fn direct_file_access(&self, path: &PathU8, w: &mut Write) -> std::io::Result<usize> {
+
+        trace!("access {:?} as direct file",path);
         // is image file from filesystem, no need to cache
         let file = File::open(path)?;
 
@@ -128,18 +140,15 @@ impl Fs {
 
         let mut first = true;
 
-        let ancestors: Vec<&std::path::Path> = path.ancestors().collect();
-        for i in -1..(ancestors.len() as i32) {
+        let comps: Vec<&std::ffi::OsStr> = path.iter().collect();
+        for i in -1..(comps.len() as i32) {
 
             if !first {
+                let comp = PathU8::from(try_path.iter().last().unwrap());
                 try_path.pop();
-                let comp = ancestors[i as usize];
 
-                if !left.to_str().unwrap().is_empty() {
-                    left = PathU8::from(comp).join(left);
-                }else{
-                    left = comp.to_owned();
-                }
+                left = join_may_empty(&PathU8::from(comp),
+                                      &left);
             }
 
             trace!("try {:?}, left {:?}", try_path, left);
@@ -187,23 +196,20 @@ impl Fs {
 
             // is a file (at previous time)
 
-            let archive_exts = vec!["zip", "cbz", "rar", "cbr", "tar", "7z"];
 
-            let ext = try_path.extension();
+            let is_archive = is_archive(&try_path, FileOrMem::Path(&try_path));
 
-
-            if ext.is_some() {
-            //not archive ext, and no left path
-            if !archive_exts.contains(&ext.unwrap().to_str().unwrap()) && left.to_str().unwrap().is_empty() {
+            if !is_archive {
                 return self.direct_file_access(&try_path, w);
-            }    
             }
-            
 
-            //has archive ext , try to open as archive
+            let mut rel_to_archive = path.clone();
 
+            for _ in left.iter() {
+                rel_to_archive.pop();
+            }
 
-            return self.try_in_archive(cache, path, &try_path, &left, w);
+            return self.try_in_archive(cache, &rel_to_archive, &try_path, &left, w);
         }
 
         return Err(Error::new(
@@ -256,6 +262,20 @@ mod tests {
 
     use super::*;
 
+    fn run2(){
+
+        let f = Fs::new(&PathU8::from(std::path::PathBuf::from(env!(
+            "CARGO_MANIFEST_DIR"
+        ))))
+        .unwrap();
+
+ let mut cache = Mutex::new(ArchiveCache::new(100, 100));
+
+        let mut c1 = std::io::Cursor::new(Vec::new());
+
+        assert!(f.read(&cache, &PathU8::from("tests/nested.zip/test.zip/dir/under_dir"), &mut c1).is_ok());
+    }
+
     #[test]
     fn run() {
         let f = Fs::new(&PathU8::from(std::path::PathBuf::from(env!(
@@ -267,20 +287,25 @@ mod tests {
 
         let mut c1 = std::io::Cursor::new(Vec::new());
 
-        f.read(&cache, &PathU8::from(""), &mut c1);
+        assert!(f.read(&cache, &PathU8::from(""), &mut c1).is_ok());
 
         let mut c2 = std::io::Cursor::new(Vec::new());
 
-        f.read(&cache, &PathU8::from("tests"), &mut c2);
+        assert!(f.read(&cache, &PathU8::from("tests"), &mut c2).is_ok());
 
         let mut c3 = std::io::Cursor::new(Vec::new());
 
-        f.read(&cache, &PathU8::from("logtrail-6.6.1-0.1.31.zip"), &mut c3);
+        assert!(f.read(&cache, &PathU8::from("not exists"), &mut c3).is_err());
 
         let mut c4 = std::io::Cursor::new(Vec::new());
 
-        f.read(&cache, &PathU8::from("tests/logtrail-6.6.1-0.1.31.zip"), &mut c4);
+        assert!(f.read(&cache, &PathU8::from("tests/test.zip"), &mut c4).is_ok());
 
+        let mut c5 = std::io::Cursor::new(Vec::new());
+        assert!(f.read(&cache, &PathU8::from("tests/test.zip/under_root"), &mut c5).is_ok());
+
+        let mut c6 = std::io::Cursor::new(Vec::new());
+        assert!(f.read(&cache, &PathU8::from("tests/test.zip/dir/under_dir"), &mut c6).is_ok());
     }
 
 }
