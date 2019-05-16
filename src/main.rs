@@ -1,9 +1,12 @@
 extern crate simple_logger;
+extern crate percent_encoding;
+
 //mod fs;
 //
 use cache::PathU8;
 use crossbeam;
 use std::sync;
+use percent_encoding::{utf8_percent_encode, DEFAULT_ENCODE_SET};
 
 #[macro_use]
 extern crate log;
@@ -39,19 +42,21 @@ fn main() {
         s.spawn(|_| {
             let mut cache_t1 = cache.clone();
 
-            filesystem.start_watch(&*cache_t1);
+            //filesystem.start_watch(&*cache_t1);
         });
     })
     .unwrap();
 
-    let addr = ([127, 0, 0, 1], 1234).into();
+    let addr = ([0, 0, 0, 0], 31257).into();
 
     let new_service = move || {
         let arc = cache.clone();
         let fs = filesystem.clone();
 
         service_fn_ok(move |req| {
-            let path = req.uri().path();
+            let raw_path = req.uri().path();
+
+            let path = percent_encoding::percent_decode(raw_path.as_bytes()).decode_utf8().unwrap();
 
             trace!("access {}", path);
 
@@ -62,8 +67,15 @@ fn main() {
 
             let res = fs.read(&*arc, &cache::PathU8::from(rel), &mut cursor);
 
-            if let Ok(_) = res {
-                return Response::new(Body::from(cursor.get_ref().clone()));
+            if let Ok(mime) = res {
+                let mut resp= Response::new(Body::from(cursor.get_ref().clone()));
+
+                let mut header = resp.headers_mut();
+
+                header.insert("content-type",hyper::header::HeaderValue::from_str(&mime).unwrap());
+                header.insert("content-length",hyper::header::HeaderValue::from_str(&cursor.get_ref().len().to_string()).unwrap());
+
+                return resp;
             }
 
             Response::new(Body::from(format!("nothing")))

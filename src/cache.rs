@@ -25,12 +25,12 @@ type NodeId = u64;
 #[cfg(debug_assertions)]
 type NodeId = PathU8;
 
-pub enum FileOrMem <'a>{
+pub enum FileOrMem<'a> {
     Path(&'a PathU8),
-    Mem(&'a [u8])
+    Mem(&'a [u8]),
 }
 
-pub fn join_may_empty(lhs :&PathU8, rhs:&PathU8)->PathU8{
+pub fn join_may_empty(lhs: &PathU8, rhs: &PathU8) -> PathU8 {
     if lhs.to_str().unwrap().is_empty() {
         return rhs.clone();
     }
@@ -42,34 +42,33 @@ pub fn join_may_empty(lhs :&PathU8, rhs:&PathU8)->PathU8{
     return lhs.join(rhs);
 }
 
-pub fn is_archive(name: &PathU8, file_or_mem:FileOrMem)->bool{
-
+pub fn is_archive(name: &PathU8, file_or_mem: FileOrMem) -> bool {
     let archive_exts = vec!["zip", "cbz", "rar", "cbr", "tar", "7z"];
 
     let ext = name.extension();
 
-            if ext.is_some() {
-                //not archive ext, and no left path
-                return archive_exts.contains(&ext.unwrap().to_str().unwrap());
-            }
+    if ext.is_some() {
+        //not archive ext, and no left path
+        return archive_exts.contains(&ext.unwrap().to_str().unwrap());
+    }
 
-            //no ext, try to detect by mime
-            let mime ;
-            match file_or_mem {
-                FileOrMem::Path(path)=>{
-                    mime = tree_magic::from_filepath(path);
-                },
-                FileOrMem::Mem(mem)=>{
-                    mime = tree_magic::from_u8(mem);
-                }
-            }
-            for test in archive_exts {
-                if mime.ends_with(test){
-                    return true;
-                }
-            }
+    //no ext, try to detect by mime
+    let mime;
+    match file_or_mem {
+        FileOrMem::Path(path) => {
+            mime = tree_magic::from_filepath(path);
+        }
+        FileOrMem::Mem(mem) => {
+            mime = tree_magic::from_u8(mem);
+        }
+    }
+    for test in archive_exts {
+        if mime.ends_with(test) {
+            return true;
+        }
+    }
 
-            return false;
+    return false;
 }
 
 fn path_to_id(_path: &PathU8) -> NodeId {
@@ -103,7 +102,9 @@ impl SizedLru {
     }
 
     fn put(&mut self, key: &NodeId, binary: Binary) -> &Binary {
-        debug_assert!(self.lru.get(key).is_none());
+        debug_assert!(self.lru.get(key).is_none(), "{:?} already exists!", key);
+
+        trace!("set file cache {:?}", key);
 
         self.size += binary.len();
 
@@ -193,24 +194,7 @@ pub enum NodeContents<'a> {
     Dir(Vec<&'a String>),
 }
 
-impl<'a> NodeContents<'a> {
-    pub fn write_to(&self, w: &mut Write) -> std::io::Result<usize> {
-        match self {
-            NodeContents::File(bin) => {
-                w.write_all(bin)?;
-                return Ok(0);
-            }
-            NodeContents::Dir(dirs) => {
-                for d in dirs {
-                    w.write_all(d.as_bytes())?;
 
-                    w.write_all(b"\n")?;
-                }
-                return Ok(0);
-            }
-        }
-    }
-}
 
 fn to_display_name(v: &String) -> String {
     if v.is_empty() {
@@ -341,6 +325,7 @@ impl ArchiveCache {
     }
 
     pub fn quick_try(&mut self, full_path: &PathU8) -> Option<NodeContents> {
+        trace!("lookup in cache by {:?}", full_path);
         let node_id = path_to_id(full_path);
 
         //dir cache take higher than file
@@ -360,22 +345,23 @@ impl ArchiveCache {
         return None;
     }
 
-    fn recursive_try(
-        &mut self,
-        virtual_path: &PathU8,
-        rel: &PathU8,
-    ) -> std::io::Result<bool> {
-
+    fn recursive_try(&mut self, virtual_path: &PathU8, rel: &PathU8) -> std::io::Result<bool> {
         trace!("slow try archive_root {:?} , rel {:?}", virtual_path, rel);
 
-        debug_assert!(!self
-            .dir_tree
-            .contains_key(&path_to_id(&join_may_empty(virtual_path,rel))),
-            "slow try codepath should not be called if {:?} already in dir cache", join_may_empty(&virtual_path,&rel));
-        debug_assert!(!self
-            .file_cache
-            .contains_key(&path_to_id(&join_may_empty(virtual_path,rel))),
-            "slow try codepath should not be called if {:?} already in file cache", join_may_empty(&virtual_path,&rel));
+        debug_assert!(
+            !self
+                .dir_tree
+                .contains_key(&path_to_id(&join_may_empty(virtual_path, rel))),
+            "slow try codepath should not be called if {:?} already in dir cache",
+            join_may_empty(&virtual_path, &rel)
+        );
+        debug_assert!(
+            !self
+                .file_cache
+                .contains_key(&path_to_id(&join_may_empty(virtual_path, rel))),
+            "slow try codepath should not be called if {:?} already in file cache",
+            join_may_empty(&virtual_path, &rel)
+        );
 
         let ar_and_entries = self
             .archive_cache
@@ -386,32 +372,33 @@ impl ArchiveCache {
 
         let mut left_path = PathU8::from("");
 
-        let mut first = true;
-
-        let comps:Vec<&std::ffi::OsStr> = rel.iter().collect();
-        for _ in -1.. (comps.len() as i32) {
-            if !first {
+        for i in 0..rel.iter().count()+1 {
+            if i !=0{
                 let comp = PathU8::from(partical_try.iter().last().unwrap());
                 partical_try.pop();
-                left_path=join_may_empty(&comp.to_owned(),&left_path);
+                left_path = join_may_empty(&comp.to_owned(), &left_path);
             }
 
-            let full_virtual = join_may_empty(virtual_path,&partical_try);
-            if self.dir_tree.contains_key(&path_to_id(&full_virtual)) 
-            {
+            let full_virtual = join_may_empty(virtual_path, &partical_try);
+            if self.dir_tree.contains_key(&path_to_id(&full_virtual)) {
                 {
                     //parent already is a dir,so we don't need to try more
                     //this can't be a nested archive (already a dir)
 
-                    Error::new(ErrorKind::NotFound,format!("{:?} is already dir, can't be nested archive",full_virtual));
+                    Error::new(
+                        ErrorKind::NotFound,
+                        format!("{:?} is already dir, can't be nested archive", full_virtual),
+                    );
                 }
             }
 
-            first = false;
+            debug!(
+                "under {:?} partical_try {:?}, left_path {:?}",
+                virtual_path, partical_try, left_path
+            );
 
-            debug!("under {:?} partical_try {:?}, left_path {:?}",virtual_path,partical_try,left_path);
-
-            let entry = ar_and_entries.1
+            let entry = ar_and_entries
+                .1
                 .entry(partical_try.to_str().unwrap().to_string());
             let mut binary;
             match entry {
@@ -423,9 +410,9 @@ impl ArchiveCache {
 
                     let mut reader = ar_and_entries.0.reader_for(ar_entry)?;
 
-
                     //allocate memory
-                    let layout : std::alloc::Layout = std::alloc::Layout::from_size_align(ar_entry.size(),1).unwrap();
+                    let layout: std::alloc::Layout =
+                        std::alloc::Layout::from_size_align(ar_entry.size(), 1).unwrap();
 
                     binary = Vec::with_capacity(ar_entry.size());
 
@@ -436,10 +423,16 @@ impl ArchiveCache {
             }
 
             //hit a entry in existing archive
-            let is_archive = is_archive(&partical_try,FileOrMem::Mem(&binary));
+            let is_archive = is_archive(&partical_try, FileOrMem::Mem(&binary));
 
             if !is_archive {
                 if left_path.to_str().unwrap().is_empty() {
+                    //normal file ,load into cache
+                    self.file_cache.put(
+                        &path_to_id(&join_may_empty(virtual_path, &partical_try)),
+                        binary,
+                    );
+
                     return Ok(true);
                 }
 
@@ -459,37 +452,26 @@ impl ArchiveCache {
                     partical_try.to_str().unwrap().to_owned() + "can not be decoded as archive",
                 ));
             }
-                
-            let nested_path = join_may_empty(virtual_path, &partical_try);
-            trace!("set nested archive from {:?} as {:?} as archive",virtual_path, nested_path);
-            
-            //this code duplicate (double call set_archive_internal from both codepath)
-            //is to workaround rust NLL bug
-            if left_path.to_str().unwrap().is_empty() {
 
-                self.set_archive_internal(&nested_path, ar.unwrap(), true);
-                return Ok(true);
-            }
+            let nested_path = join_may_empty(virtual_path, &partical_try);
+            trace!(
+                "set nested archive from {:?} as {:?} as archive",
+                virtual_path,
+                nested_path
+            );
 
             // have left path, but partical_path is not archive
             self.set_archive_internal(&nested_path, ar.unwrap(), true);
 
-            {
-
-                let node_id = path_to_id(&join_may_empty(virtual_path,rel));
-
-if let Some(children) = self.dir_tree.clone().get(&node_id) {
-    return Ok(true);
-        }
-
-        if let Some(binary) = self.file_cache.get(&node_id) {
-            return Ok(true);
-        }
+            if left_path.to_str().unwrap().is_empty() {
+                return Ok(true);
             }
-            
+
+            if self.quick_try(&join_may_empty(virtual_path, rel)).is_some() {
+                return Ok(true);
+            }
 
             return self.recursive_try(&nested_path, &left_path);
-
         }
 
         //all path tried, but no matched archive
@@ -504,14 +486,18 @@ if let Some(children) = self.dir_tree.clone().get(&node_id) {
     }
 
     pub fn slow_try(&mut self, path: &PathU8) -> std::io::Result<NodeContents> {
-
-        trace!("lookup in cache by {:?}", path );
+        trace!("slow try {:?}", path);
 
         {
             //should quick_try() first, and expose this function only
             //but rust has bug that early return still extends lifetime
             //to function scope so we expose quick_try too
-            debug_assert!(!self.dir_tree.contains_key(&path_to_id(path)) && self.file_cache.contains_key(&path_to_id(path)),"{:?} already in cache before get, caller should check quick_try result first",path);
+            debug_assert!(
+                !self.dir_tree.contains_key(&path_to_id(path))
+                    && !self.file_cache.contains_key(&path_to_id(path)),
+                "{:?} already in cache before get, caller should check quick_try result first",
+                path
+            );
         }
 
         //try to find in archive
@@ -525,7 +511,7 @@ if let Some(children) = self.dir_tree.clone().get(&node_id) {
         let workaround_rust_nll = self.dir_tree.clone();
 
         for virtual_path in workaround_rust_nll.get(&virtual_root_id).unwrap().keys() {
-            trace!("key is {:?}",virtual_path);
+            trace!("key is {:?}", virtual_path);
             if !path.starts_with(virtual_path) {
                 continue;
             }
@@ -547,19 +533,26 @@ if let Some(children) = self.dir_tree.clone().get(&node_id) {
             ));
         }
 
-
         //longest path first
 
         let matched = longest_match.unwrap();
-        trace!("longest_match {:?}",matched);
+        trace!("longest_match {:?}", matched);
         let rel = path.strip_prefix(matched.clone()).unwrap();
 
         self.recursive_try(&matched, &PathU8::from(rel))?;
 
-        return Ok(self.quick_try(path).unwrap());
+        match self.quick_try(path) {
+            Some(result) => {
+                return Ok(result);
+            }
+            None => {
+                return Err(Error::new(ErrorKind::NotFound, ""));
+            }
+        }
     }
 
     fn grow_under(&mut self, this_root: &PathU8, path: &PathU8) {
+        trace!("grow under {:?} {:?}", this_root, path);
 
         let mut parent = this_root.clone();
 
@@ -571,16 +564,15 @@ if let Some(children) = self.dir_tree.clone().get(&node_id) {
             let entry = self.dir_tree.entry(parent_id).or_insert(HashMap::new());
 
             let utf8 = String::from(comp.to_str().unwrap());
+            parent = full_path;
+
             if entry.contains_key(&utf8) {
-                parent = full_path;
                 continue;
             }
 
-            let node_id = path_to_id(&full_path);
+            let node_id = path_to_id(&parent);
 
             entry.insert(utf8, node_id);
-
-            parent = full_path;
         }
     }
 
@@ -590,8 +582,6 @@ if let Some(children) = self.dir_tree.clone().get(&node_id) {
         ar: ArArchive,
         is_nested: bool,
     ) -> NodeContents {
-
-
         let virtual_root_path = &PathU8::from(VIRTUAL_ROOT_PATH);
         let virtual_root_id: NodeId = path_to_id(virtual_root_path);
 
@@ -599,7 +589,10 @@ if let Some(children) = self.dir_tree.clone().get(&node_id) {
 
         debug_assert!(!vroot_children.contains_key(virtual_path.to_str().unwrap()));
 
-        vroot_children.insert(virtual_path.to_str().unwrap().to_owned(),path_to_id(virtual_path));
+        vroot_children.insert(
+            virtual_path.to_str().unwrap().to_owned(),
+            path_to_id(virtual_path),
+        );
 
         let mut entries = HashMap::new();
 
@@ -607,7 +600,6 @@ if let Some(children) = self.dir_tree.clone().get(&node_id) {
             self.grow_under(virtual_path, &PathU8::from(f.name().clone()));
             entries.insert(f.name().to_owned(), f);
         }
-
 
         self.archive_cache
             .put(path_to_id(virtual_path), (ar, entries, is_nested));
@@ -638,7 +630,6 @@ if let Some(children) = self.dir_tree.clone().get(&node_id) {
         //all virtual path must be relative to 'virtual root'
         debug_assert!(virtual_path.is_relative());
 
-
         if self.dir_tree.contains_key(&node_id) {
             //already read. ignore
             let ret = Vec::from_iter(
@@ -650,11 +641,11 @@ if let Some(children) = self.dir_tree.clone().get(&node_id) {
             return Ok(NodeContents::Dir(ret));
         }
 
-        debug!("try to open {:?} as archive",archive_path);
+        debug!("try to open {:?} as archive", archive_path);
 
         let ar = ArArchive::new(ArStream::from_file(archive_path)?, None)?;
 
-        trace!("added archive {:?} as {:?}",archive_path, virtual_path);
+        trace!("added archive {:?} as {:?}", archive_path, virtual_path);
         return Ok(self.set_archive_internal(virtual_path, ar, false));
     }
 }
@@ -665,63 +656,74 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_only_archive_under_root(){
+    fn test_only_archive_under_root() {
         simple_logger::init();
 
         let mut d = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
         d.push("tests/nested.zip");
 
-        let mut ac= ArchiveCache::new(1000, 10);
+        let mut ac = ArchiveCache::new(1000, 10);
 
         assert!(!ac.dir_tree.is_empty());
 
         let virtual_path = "test/test.zip";
 
-        assert!(ac.set_archive(&PathU8::from(virtual_path), &d.clone()).is_ok());
+        assert!(ac
+            .set_archive(&PathU8::from(virtual_path), &d.clone())
+            .is_ok());
 
         let vroot_id = path_to_id(&PathU8::from(VIRTUAL_ROOT_PATH));
 
         let children = ac.dir_tree.get(&vroot_id).unwrap();
 
-        assert_eq!(children.len(),1);
+        assert_eq!(children.len(), 1);
     }
 
     #[test]
-    fn test_nested (){
+    fn test_nested() {
         simple_logger::init();
 
         let mut d = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
         d.push("tests/nested.zip");
 
-        let mut ac= ArchiveCache::new(1000, 10);
+        let mut ac = ArchiveCache::new(1000, 10);
 
         assert!(!ac.dir_tree.is_empty());
 
         let virtual_path = "tek";
 
-        match ac.set_archive(&PathU8::from(virtual_path), &d.clone()).unwrap() {
+        match ac
+            .set_archive(&PathU8::from(virtual_path), &d.clone())
+            .unwrap()
+        {
             NodeContents::File(_) => {
                 assert!(false);
-            },
+            }
             NodeContents::Dir(dir) => {
                 assert!(dir.contains(&&("test.zip".to_owned())));
             }
         }
 
-        ac.recursive_try(&PathU8::from(virtual_path),&PathU8::from("test.zip")).unwrap();
+        ac.recursive_try(&PathU8::from(virtual_path), &PathU8::from("test.zip"))
+            .unwrap();
 
-        ac.recursive_try(&PathU8::from(virtual_path).join("test.zip"),&PathU8::from("under_root")).unwrap(); 
-        assert!(ac.slow_try(&PathU8::from(virtual_path).join(PathU8::from("test.zip"))).is_ok());
-        assert!(ac.slow_try(&PathU8::from(virtual_path).join(PathU8::from("test.zip/under_root"))).is_ok());
-
+        ac.recursive_try(
+            &PathU8::from(virtual_path).join("test.zip"),
+            &PathU8::from("under_root"),
+        )
+        .unwrap();
+        assert!(ac
+            .quick_try(&PathU8::from(virtual_path).join(PathU8::from("test.zip")))
+            .is_some());
+        assert!(ac
+            .quick_try(&PathU8::from(virtual_path).join(PathU8::from("test.zip/under_root")))
+            .is_some());
     }
 
     #[test]
     fn test_read() {
-
-    
         simple_logger::init();
 
         let mut d = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
@@ -735,18 +737,7 @@ mod tests {
 
             assert!(!tree.dir_tree.is_empty());
 
-           match tree.set_archive(&PathU8::from(p), &d.clone()).unwrap() {
-               NodeContents::File(_) => {
-                   assert!(false);
-               }
-               NodeContents::Dir(dir) => {
-                   assert!(dir.contains(&&("dir".to_owned())));
-                   assert!(dir.contains(&&("under_root".to_owned())));
-               }
-           }
-
-
-            match tree.quick_try(&PathU8::from(p)).unwrap(){
+            match tree.set_archive(&PathU8::from(p), &d.clone()).unwrap() {
                 NodeContents::File(_) => {
                     assert!(false);
                 }
@@ -756,17 +747,31 @@ mod tests {
                 }
             }
 
-            
+            match tree.quick_try(&PathU8::from(p)).unwrap() {
+                NodeContents::File(_) => {
+                    assert!(false);
+                }
+                NodeContents::Dir(dir) => {
+                    assert!(dir.contains(&&("dir".to_owned())));
+                    assert!(dir.contains(&&("under_root".to_owned())));
+                }
+            }
 
-            tree.recursive_try(&PathU8::from(p),&PathU8::from("under_root")).unwrap();
-                
+            tree.recursive_try(&PathU8::from(p), &PathU8::from("under_root"))
+                .unwrap();
 
-            tree.recursive_try(&PathU8::from(p),&PathU8::from("dir/under_dir")).unwrap();
+            tree.recursive_try(&PathU8::from(p), &PathU8::from("dir/under_dir"))
+                .unwrap();
 
-            assert!(tree.recursive_try(&PathU8::from(p),&PathU8::from("not_exists")).is_err());
-            assert!(tree.recursive_try(&PathU8::from(p),&PathU8::from("dir/not_exists")).is_err());
-            assert!(tree.recursive_try(&PathU8::from(p),&PathU8::from("no_exists_dir/not_exists")).is_err());
-
+            assert!(tree
+                .recursive_try(&PathU8::from(p), &PathU8::from("not_exists"))
+                .is_err());
+            assert!(tree
+                .recursive_try(&PathU8::from(p), &PathU8::from("dir/not_exists"))
+                .is_err());
+            assert!(tree
+                .recursive_try(&PathU8::from(p), &PathU8::from("no_exists_dir/not_exists"))
+                .is_err());
         }
     }
 

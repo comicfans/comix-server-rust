@@ -1,6 +1,7 @@
 extern crate relative_path;
+extern crate tree_magic;
 
-use super::cache::{ArchiveCache,is_archive,PathU8,FileOrMem,join_may_empty};
+use super::cache::{is_archive, join_may_empty, ArchiveCache, FileOrMem, PathU8, NodeContents};
 use relative_path::RelativePathBuf;
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
@@ -19,6 +20,28 @@ pub struct Fs {
 
 unsafe impl Send for Fs {}
 unsafe impl Sync for Fs {}
+
+const MIME_TEXT : &str=  "Content-Type: text/plain; charset=utf-8";
+
+impl<'a> NodeContents<'a> {
+    pub fn write_to(&self, w: &mut Write) -> std::io::Result<String> {
+        match self {
+            NodeContents::File(bin) => {
+                w.write_all(bin)?;
+                return Ok(tree_magic::from_u8(&bin));
+            }
+            NodeContents::Dir(dirs) => {
+                for d in dirs {
+                    w.write_all(d.as_bytes())?;
+                    w.write_all(b"\n")?;
+                }
+                return Ok(String::from(MIME_TEXT));
+            }
+        }
+    }
+}
+
+
 
 impl Fs {
     pub fn start_watch(&self, cache: &Mutex<ArchiveCache>) {
@@ -83,27 +106,31 @@ impl Fs {
         archive_path: &PathU8,
         left: &PathU8,
         w: &mut Write,
-    ) -> std::io::Result<usize> {
-
-        trace!("try in archive {:?}, as virtual_path {:?}, left {:?}",archive_path, virtual_path,left);
+    ) -> std::io::Result<String> {
+        trace!(
+            "try in archive {:?}, as virtual_path {:?}, left {:?}",
+            archive_path,
+            virtual_path,
+            left
+        );
 
         let mut lock = cache.lock().unwrap();
 
         let res = lock.set_archive(virtual_path, &archive_path)?;
 
         if left.to_str().unwrap().is_empty() {
-            trace!("no left, use archive {:?} result",virtual_path);
+            trace!("no left, use archive {:?} result", virtual_path);
             return res.write_to(w);
         }
 
-        match lock.quick_try(&join_may_empty(virtual_path,left)) {
-            Some(result)=>{
+        match lock.quick_try(&join_may_empty(virtual_path, left)) {
+            Some(result) => {
                 return result.write_to(w);
-            },
-            _=>{}
+            }
+            _ => {}
         }
 
-        match lock.slow_try(&join_may_empty(virtual_path,left)) {
+        match lock.slow_try(&join_may_empty(virtual_path, left)) {
             Err(er) => {
                 return Err(er);
             }
@@ -113,9 +140,8 @@ impl Fs {
         }
     }
 
-    fn direct_file_access(&self, path: &PathU8, w: &mut Write) -> std::io::Result<usize> {
-
-        trace!("access {:?} as direct file",path);
+    fn direct_file_access(&self, path: &PathU8, w: &mut Write) -> std::io::Result<String> {
+        trace!("access {:?} as direct file", path);
         // is image file from filesystem, no need to cache
         let file = File::open(path)?;
 
@@ -123,7 +149,7 @@ impl Fs {
         BufReader::new(file).read_to_end(&mut buf)?;
 
         w.write_all(&buf)?;
-        return Ok(0);
+        return Ok(tree_magic::from_filepath(path));
     }
 
     fn try_access(
@@ -131,7 +157,7 @@ impl Fs {
         cache: &Mutex<ArchiveCache>,
         path: &PathU8,
         w: &mut Write,
-    ) -> std::io::Result<usize> {
+    ) -> std::io::Result<String> {
         trace!("try access {:?}", path);
 
         let mut try_path = self.root.join(path);
@@ -140,15 +166,12 @@ impl Fs {
 
         let mut first = true;
 
-        let comps: Vec<&std::ffi::OsStr> = path.iter().collect();
-        for i in -1..(comps.len() as i32) {
-
-            if !first {
+        for i in 0..path.iter().count()+1{
+            if i !=0{
                 let comp = PathU8::from(try_path.iter().last().unwrap());
                 try_path.pop();
 
-                left = join_may_empty(&PathU8::from(comp),
-                                      &left);
+                left = join_may_empty(&PathU8::from(comp), &left);
             }
 
             trace!("try {:?}, left {:?}", try_path, left);
@@ -167,12 +190,12 @@ impl Fs {
 
             //attr ok is file or dir
 
-            if attr.unwrap().is_dir(){
-                if !first{
+            if attr.unwrap().is_dir() {
+                if i !=0{
                     //path has comp left, but parent is a dir (not archive)
                     //so this path can not be a file inside archive
                     //(we already tried fullpath as file and it is not readable)
-                    return Err(Error::new(ErrorKind::NotFound,"path is not dir"));
+                    return Err(Error::new(ErrorKind::NotFound, "path is not dir"));
                 }
                 //only first try to test if target is dir
                 //otherwise it must be archive + inner path
@@ -183,19 +206,11 @@ impl Fs {
                     w.write_all(entry.file_name().into_string().unwrap().as_bytes())?;
                     w.write_all(b"\n")?;
                 }
-                return Ok(0);
+                return Ok(MIME_TEXT.to_string());
             }
 
 
-
-            // is file
-            // first test if this is image file
-            //
-
-            first = false;
-
             // is a file (at previous time)
-
 
             let is_archive = is_archive(&try_path, FileOrMem::Path(&try_path));
 
@@ -223,7 +238,7 @@ impl Fs {
         cache: &Mutex<ArchiveCache>,
         path: &PathU8,
         writer: &mut W,
-    ) -> std::io::Result<usize> {
+    ) -> std::io::Result<String> {
         if path.is_absolute() {
             trace!("access abs path {:?} forbidden", path);
             return Err(Error::new(
@@ -262,18 +277,23 @@ mod tests {
 
     use super::*;
 
-    fn run2(){
-
+    fn run2() {
         let f = Fs::new(&PathU8::from(std::path::PathBuf::from(env!(
             "CARGO_MANIFEST_DIR"
         ))))
         .unwrap();
 
- let mut cache = Mutex::new(ArchiveCache::new(100, 100));
+        let mut cache = Mutex::new(ArchiveCache::new(100, 100));
 
         let mut c1 = std::io::Cursor::new(Vec::new());
 
-        assert!(f.read(&cache, &PathU8::from("tests/nested.zip/test.zip/dir/under_dir"), &mut c1).is_ok());
+        assert!(f
+            .read(
+                &cache,
+                &PathU8::from("tests/nested.zip/test.zip/dir/under_dir"),
+                &mut c1
+            )
+            .is_ok());
     }
 
     #[test]
@@ -295,17 +315,29 @@ mod tests {
 
         let mut c3 = std::io::Cursor::new(Vec::new());
 
-        assert!(f.read(&cache, &PathU8::from("not exists"), &mut c3).is_err());
+        assert!(f
+            .read(&cache, &PathU8::from("not exists"), &mut c3)
+            .is_err());
 
         let mut c4 = std::io::Cursor::new(Vec::new());
 
-        assert!(f.read(&cache, &PathU8::from("tests/test.zip"), &mut c4).is_ok());
+        assert!(f
+            .read(&cache, &PathU8::from("tests/test.zip"), &mut c4)
+            .is_ok());
 
         let mut c5 = std::io::Cursor::new(Vec::new());
-        assert!(f.read(&cache, &PathU8::from("tests/test.zip/under_root"), &mut c5).is_ok());
+        assert!(f
+            .read(&cache, &PathU8::from("tests/test.zip/under_root"), &mut c5)
+            .is_ok());
 
         let mut c6 = std::io::Cursor::new(Vec::new());
-        assert!(f.read(&cache, &PathU8::from("tests/test.zip/dir/under_dir"), &mut c6).is_ok());
+        assert!(f
+            .read(
+                &cache,
+                &PathU8::from("tests/test.zip/dir/under_dir"),
+                &mut c6
+            )
+            .is_ok());
     }
 
 }
