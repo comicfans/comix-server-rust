@@ -57,7 +57,9 @@ pub fn run_server_from_listener(listener : std::net::TcpListener, fs_root: &cach
             if let Ok(mime) = res {
                 let mut resp = Response::new(Body::from(cursor.get_ref().clone()));
 
-                let mut header = resp.headers_mut();
+                *resp.status_mut() = StatusCode::OK;
+
+                let header = resp.headers_mut();
 
                 header.insert(
                     "content-type",
@@ -72,7 +74,10 @@ pub fn run_server_from_listener(listener : std::net::TcpListener, fs_root: &cach
                 return resp;
             }
 
-            Response::new(Body::from(format!("nothing")))
+            let mut not_found = Response::new(Body::from(format!("nothing")));
+            *not_found.status_mut() = StatusCode::NOT_FOUND;
+
+            return not_found;
         })
     };
 
