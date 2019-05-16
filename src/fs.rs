@@ -1,7 +1,7 @@
 extern crate relative_path;
 extern crate tree_magic;
 
-use super::cache::{is_archive, join_may_empty, ArchiveCache, FileOrMem, PathU8, NodeContents};
+use super::cache::{is_archive, join_may_empty, ArchiveCache, FileOrMem, NodeContents, PathU8};
 use relative_path::RelativePathBuf;
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
@@ -21,7 +21,7 @@ pub struct Fs {
 unsafe impl Send for Fs {}
 unsafe impl Sync for Fs {}
 
-const MIME_TEXT : &str=  "Content-Type: text/plain; charset=utf-8";
+const MIME_TEXT: &str = "Content-Type: text/plain; charset=utf-8";
 
 impl<'a> NodeContents<'a> {
     pub fn write_to(&self, w: &mut Write) -> std::io::Result<String> {
@@ -40,8 +40,6 @@ impl<'a> NodeContents<'a> {
         }
     }
 }
-
-
 
 impl Fs {
     pub fn start_watch(&self, cache: &Mutex<ArchiveCache>) {
@@ -166,8 +164,8 @@ impl Fs {
 
         let mut first = true;
 
-        for i in 0..path.iter().count()+1{
-            if i !=0{
+        for i in 0..path.iter().count() + 1 {
+            if i != 0 {
                 let comp = PathU8::from(try_path.iter().last().unwrap());
                 try_path.pop();
 
@@ -191,7 +189,7 @@ impl Fs {
             //attr ok is file or dir
 
             if attr.unwrap().is_dir() {
-                if i !=0{
+                if i != 0 {
                     //path has comp left, but parent is a dir (not archive)
                     //so this path can not be a file inside archive
                     //(we already tried fullpath as file and it is not readable)
@@ -208,7 +206,6 @@ impl Fs {
                 }
                 return Ok(MIME_TEXT.to_string());
             }
-
 
             // is a file (at previous time)
 
@@ -250,6 +247,13 @@ impl Fs {
         let canonicalized = RelativePathBuf::new().to_path(path);
 
         trace!("access {:?}", canonicalized);
+
+        if canonicalized.starts_with("..") {
+            return Err(Error::new(
+                ErrorKind::PermissionDenied,
+                std::format!("cannot access beyond root {:?}", self.root),
+            ));
+        }
 
         //test cache first
 
@@ -294,6 +298,13 @@ mod tests {
                 &mut c1
             )
             .is_ok());
+    }
+
+    #[test]
+    fn test_can(){
+
+        let canonicalized = RelativePathBuf::new().to_path("../../");
+        println!("{:?}",canonicalized);
     }
 
     #[test]

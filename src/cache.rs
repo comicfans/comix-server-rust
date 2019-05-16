@@ -17,7 +17,7 @@ pub type PathU8 = std::path::PathBuf;
 
 pub type Binary = std::vec::Vec<u8>;
 
-const VIRTUAL_ROOT_PATH: &str = "*virtual_root*";
+pub const VIRTUAL_ROOT_PATH: &str = "*\\/virtual_root\\/*";
 
 #[cfg(not(debug_assertions))]
 type NodeId = u64;
@@ -111,8 +111,10 @@ impl SizedLru {
         self.lru.put(key.clone(), binary);
 
         if self.size > self.limit {
-            self.recycle();
+            self.recycle(key);
         }
+
+        debug_assert!(self.lru.contains(key));
 
         return self.lru.get(key).unwrap();
     }
@@ -133,17 +135,22 @@ impl SizedLru {
         }
     }
 
-    fn recycle(&mut self) {
+    fn recycle(&mut self, preserved_key: &NodeId) {
         debug_assert!(self.size > self.limit);
 
         let mut keys: Vec<NodeId> = Vec::new();
 
-        for it in self.lru.iter() {
-            keys.push(it.0.clone());
+        //try to remove most unused ones
+        for (id, bin) in self.lru.iter().rev() {
+            if id == preserved_key {
+                continue;
+            }
 
-            debug_assert!(self.size >= it.1.len());
+            keys.push(id.clone());
 
-            self.size -= it.1.len();
+            debug_assert!(self.size >= bin.len());
+
+            self.size -= bin.len();
 
             if self.size <= self.limit {
                 break;
@@ -193,8 +200,6 @@ pub enum NodeContents<'a> {
     File(&'a Vec<u8>),
     Dir(Vec<&'a String>),
 }
-
-
 
 fn to_display_name(v: &String) -> String {
     if v.is_empty() {
@@ -372,8 +377,8 @@ impl ArchiveCache {
 
         let mut left_path = PathU8::from("");
 
-        for i in 0..rel.iter().count()+1 {
-            if i !=0{
+        for i in 0..rel.iter().count() + 1 {
+            if i != 0 {
                 let comp = PathU8::from(partical_try.iter().last().unwrap());
                 partical_try.pop();
                 left_path = join_may_empty(&comp.to_owned(), &left_path);
@@ -585,6 +590,12 @@ impl ArchiveCache {
         let virtual_root_path = &PathU8::from(VIRTUAL_ROOT_PATH);
         let virtual_root_id: NodeId = path_to_id(virtual_root_path);
 
+        debug_assert!(
+            virtual_path != virtual_root_path,
+            "archive virtual path can not be same to virtual root {}",
+            VIRTUAL_ROOT_PATH
+        );
+
         let vroot_children = self.dir_tree.get_mut(&virtual_root_id).unwrap();
 
         debug_assert!(!vroot_children.contains_key(virtual_path.to_str().unwrap()));
@@ -723,6 +734,21 @@ mod tests {
     }
 
     #[test]
+    fn test_lru() {
+        let mut cache = LruCache::new(100);
+
+        cache.put("key0", 0);
+        cache.put("key1", 100);
+        cache.put("key2", 200);
+        cache.put("key3", 300);
+        cache.put("key4", 400);
+
+        for (i, v) in cache.iter() {
+            println!("iter key {}, v {}", i, v);
+        }
+    }
+
+    #[test]
     fn test_read() {
         simple_logger::init();
 
@@ -733,7 +759,7 @@ mod tests {
         let vec = vec!["ak", "test/test-6.6.1-0.1.31.zip", ""];
 
         for p in vec {
-            let mut tree = ArchiveCache::new(1000, 10);
+            let mut tree = ArchiveCache::new(0, 10);
 
             assert!(!tree.dir_tree.is_empty());
 
