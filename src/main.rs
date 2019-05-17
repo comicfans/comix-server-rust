@@ -11,7 +11,7 @@ mod server;
 fn main(){
     simple_logger::init();
 
-    server::run_server(([0, 0, 0, 0], 0).into(), &cache::PathU8::from(env!("CARGO_MANIFEST_DIR")));
+    server::run_server(([0, 0, 0, 0], 31257).into(), &cache::PathU8::from("."));
 }
 
 #[cfg(test)]
