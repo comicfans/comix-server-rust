@@ -1,5 +1,8 @@
 extern crate relative_path;
 extern crate tree_magic;
+extern crate pretty_bytes;
+
+use pretty_bytes::converter::convert;
 
 use super::cache::{is_archive, join_may_empty, ArchiveCache, FileOrMem, NodeContents, PathU8};
 use relative_path::RelativePathBuf;
@@ -28,6 +31,7 @@ impl<'a> NodeContents<'a> {
         match self {
             NodeContents::File(bin) => {
                 w.write_all(bin)?;
+                trace!("file size {}",convert(bin.len() as f64));
                 return Ok(tree_magic::from_u8(&bin));
             }
             NodeContents::Dir(dirs) => {
