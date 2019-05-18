@@ -85,9 +85,10 @@ impl Fs {
     }
 
     pub fn new(path: &PathU8) -> std::io::Result<Fs> {
+        debug!("path {:?}",path);
         let abs_root = std::fs::canonicalize(path)?;
 
-        debug!("fs root {:?}", abs_root);
+        debug!("fs normalized root {:?}", abs_root);
 
         let ret = Fs { root: abs_root };
 
