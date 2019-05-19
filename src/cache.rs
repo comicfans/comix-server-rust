@@ -71,13 +71,14 @@ pub fn is_archive(name: &PathU8, file_or_mem: FileOrMem) -> bool {
     return false;
 }
 
-fn path_to_id(_path: &PathU8) -> NodeId {
+fn path_to_id(path: &PathU8) -> NodeId {
     #[cfg(debug_assertions)]
-    return _path.clone();
+    return path.clone();
 
     #[cfg(not(debug_assertions))]
     {
-        let s = std::collections::hash_map::DefaultHasher::new();
+        let mut s = std::collections::hash_map::DefaultHasher::new();
+        s.write(path.to_str().unwrap().as_bytes());
         s.finish()
     }
 }

@@ -2,6 +2,10 @@ extern crate log;
 extern crate futures;
 extern crate simple_logger;
 extern crate image;
+extern crate pretty_bytes;
+
+use pretty_bytes::converter::convert;
+
 
 use super::fs;
 use super::cache;
@@ -30,7 +34,7 @@ fn convert_if_needed(bin: &[u8], mime: String)-> Option<std::io::Cursor<Vec<u8>>
     //png size reduce is huge, but jpg is not. we need to lower q very much
     //for jpg
     let mut q = 80;
-    if mime.ends_with("jpg"){
+    if mime.ends_with("jpeg"){
         q=60;
     }
 
@@ -40,22 +44,23 @@ fn convert_if_needed(bin: &[u8], mime: String)-> Option<std::io::Cursor<Vec<u8>>
         return None;
     }
                         
-    let mut convert = std::io::Cursor::new(Vec::new());
+    let mut reduced= std::io::Cursor::new(Vec::new());
 
-    let mut enc = image::jpeg::JPEGEncoder::new_with_quality(&mut convert,q);
+    let mut enc = image::jpeg::JPEGEncoder::new_with_quality(&mut reduced,q);
 
-    let img = decode.unwrap().to_rgb();
+    let img = decode.unwrap();
 
-    let width = img.width();
-    let height = img.height();
 
-    let res = enc.encode(&img.into_raw(), width,height,image::ColorType::RGB(0));
+    let res = enc.encode(&img.raw_pixels(), img.width(),img.height(),img.color());
 
     if res.is_err() {
+        trace!("encode error {:?}",res);
         return None;
     }
+                
+    trace!("reduced from {} to {}",convert(bin.len() as f64),convert(reduced.get_ref().len() as f64));
 
-    return Some(convert);
+    return Some(reduced);
                             
 }
 
