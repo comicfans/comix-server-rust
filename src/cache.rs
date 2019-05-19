@@ -329,7 +329,7 @@ impl ArchiveCache {
         self.archive_cache.pop(node_id);
     }
 
-    pub fn quick_try(&mut self, full_path: &PathU8) -> Option<NodeContents> {
+    fn quick_try(&mut self, full_path: &PathU8) -> Option<NodeContents> {
         trace!("lookup in cache by {:?}", full_path);
         let node_id = path_to_id(full_path);
 
@@ -489,6 +489,18 @@ impl ArchiveCache {
                 + virtual_path.to_str().unwrap(),
         ));
     }
+
+    pub fn get(&mut self, path: &PathU8) -> std::io::Result<NodeContents> {
+        let quick_tried = self.quick_try(path);
+
+        if let Some(hit) = quick_tried {
+            return Ok(hit);
+        }
+
+        return self.slow_try(path);
+
+    }
+
 
     pub fn slow_try(&mut self, path: &PathU8) -> std::io::Result<NodeContents> {
         trace!("slow try {:?}", path);
@@ -726,11 +738,11 @@ mod tests {
         )
         .unwrap();
         assert!(ac
-            .quick_try(&PathU8::from(virtual_path).join(PathU8::from("test.zip")))
-            .is_some());
+            .get(&PathU8::from(virtual_path).join(PathU8::from("test.zip")))
+            .is_ok());
         assert!(ac
-            .quick_try(&PathU8::from(virtual_path).join(PathU8::from("test.zip/under_root")))
-            .is_some());
+            .get(&PathU8::from(virtual_path).join(PathU8::from("test.zip/under_root")))
+            .is_ok());
     }
 
     #[test]
@@ -773,7 +785,7 @@ mod tests {
                 }
             }
 
-            match tree.quick_try(&PathU8::from(p)).unwrap() {
+            match tree.get(&PathU8::from(p)).unwrap() {
                 NodeContents::File(_) => {
                     assert!(false);
                 }
@@ -783,20 +795,20 @@ mod tests {
                 }
             }
 
-            tree.recursive_try(&PathU8::from(p), &PathU8::from("under_root"))
+            tree.get(&PathU8::from(p).join(PathU8::from("under_root")))
                 .unwrap();
 
-            tree.recursive_try(&PathU8::from(p), &PathU8::from("dir/under_dir"))
+            tree.get(&PathU8::from(p).join(PathU8::from("dir/under_dir")))
                 .unwrap();
 
             assert!(tree
-                .recursive_try(&PathU8::from(p), &PathU8::from("not_exists"))
+                .get(&PathU8::from(p).join(PathU8::from("not_exists")))
                 .is_err());
             assert!(tree
-                .recursive_try(&PathU8::from(p), &PathU8::from("dir/not_exists"))
+                .get(&PathU8::from(p).join(PathU8::from("dir/not_exists")))
                 .is_err());
             assert!(tree
-                .recursive_try(&PathU8::from(p), &PathU8::from("no_exists_dir/not_exists"))
+                .get(&PathU8::from(p).join(PathU8::from("no_exists_dir/not_exists")))
                 .is_err());
         }
     }

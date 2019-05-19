@@ -126,21 +126,9 @@ impl Fs {
             return res.write_to(w);
         }
 
-        match lock.quick_try(&join_may_empty(virtual_path, left)) {
-            Some(result) => {
-                return result.write_to(w);
-            }
-            _ => {}
-        }
-
-        match lock.slow_try(&join_may_empty(virtual_path, left)) {
-            Err(er) => {
-                return Err(er);
-            }
-            Ok(contents) => {
-                return contents.write_to(w);
-            }
-        }
+        let result = lock.get(&join_may_empty(virtual_path, left))?;
+                
+        return result.write_to(w);
     }
 
     fn direct_file_access(&self, path: &PathU8, w: &mut Write) -> std::io::Result<String> {
@@ -167,7 +155,6 @@ impl Fs {
 
         let mut left = PathU8::from("");
 
-        let mut first = true;
 
         for i in 0..path.iter().count() + 1 {
             if i != 0 {
@@ -187,7 +174,6 @@ impl Fs {
                 //can not read file attr
                 //no such file , or no permission
                 //just continue
-                first = false;
                 continue;
             }
 
@@ -264,9 +250,9 @@ impl Fs {
 
         {
             let mut lock = cache.lock().unwrap();
-            let res = lock.quick_try(&canonicalized);
+            let res = lock.get(&canonicalized);
 
-            if let Some(node_contents) = res {
+            if let Ok(node_contents) = res {
                 trace!("cache hit for {:?}", path);
                 return node_contents.write_to(writer);
             }
