@@ -3,8 +3,11 @@ extern crate unarr;
 
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
+
+#[cfg(not(debug_assertions))]
 use std::hash::Hasher;
-use std::io::{Error, ErrorKind, Read, Write};
+
+use std::io::{Error, ErrorKind, Read};
 use std::iter::FromIterator;
 use std::string::String;
 use std::vec::Vec;
@@ -25,6 +28,45 @@ type NodeId = u64;
 #[cfg(debug_assertions)]
 type NodeId = PathU8;
 
+pub struct RevPathWalker {
+    root: PathU8,
+    left: PathU8,
+    first: bool,
+}
+
+impl RevPathWalker {
+    pub fn new(path: &PathU8) -> RevPathWalker {
+        RevPathWalker {
+            root: path.clone(),
+            left: PathU8::from(""),
+            first: true,
+        }
+    }
+}
+
+impl Iterator for RevPathWalker {
+    type Item = (PathU8, PathU8);
+
+    fn next(&mut self) -> Option<(PathU8, PathU8)> {
+        if self.first {
+            self.first = false;
+            return Some((self.root.clone(), self.left.clone()));
+        }
+
+        //not first .test left is empty
+        //
+        if self.root.to_str().unwrap().is_empty() {
+            return None;
+        }
+
+        let movecomp = PathU8::from(self.root.iter().last().unwrap());
+        self.root.pop();
+        self.left = join_may_empty(&movecomp, &self.left);
+
+        Some((self.root.clone(), self.left.clone()))
+    }
+}
+
 pub enum FileOrMem<'a> {
     Path(&'a PathU8),
     Mem(&'a [u8]),
@@ -39,7 +81,7 @@ pub fn join_may_empty(lhs: &PathU8, rhs: &PathU8) -> PathU8 {
         return lhs.clone();
     }
 
-    return lhs.join(rhs);
+    lhs.join(rhs)
 }
 
 pub fn is_archive(name: &PathU8, file_or_mem: FileOrMem) -> bool {
@@ -68,7 +110,7 @@ pub fn is_archive(name: &PathU8, file_or_mem: FileOrMem) -> bool {
         }
     }
 
-    return false;
+    false
 }
 
 fn path_to_id(path: &PathU8) -> NodeId {
@@ -94,7 +136,7 @@ impl SizedLru {
         SizedLru {
             lru: LruCache::new(4096),
             size: 0,
-            limit: limit,
+            limit,
         }
     }
 
@@ -117,7 +159,7 @@ impl SizedLru {
 
         debug_assert!(self.lru.contains(key));
 
-        return self.lru.get(key).unwrap();
+        self.lru.get(key).unwrap()
     }
 
     fn get(&mut self, key: &NodeId) -> Option<&Binary> {
@@ -172,28 +214,27 @@ pub struct ArchiveCache {
 }
 
 impl Display for ArchiveCache {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> Result<(), std::fmt::Error> {
         #[cfg(debug_assertions)]
         {
             for (key, value) in self.dir_tree.iter() {
-                write!(f, "{}:\n", key.display())?;
+                writeln!(f, "{}:", key.display())?;
 
                 for name in value.keys() {
-                    write!(f, "-{}\n", to_display_name(name))?;
+                    writeln!(f, "-{}", to_display_name(name))?;
                 }
             }
-            write!(f, "\n")?;
         }
 
         let virtual_root_path = PathU8::from(VIRTUAL_ROOT_PATH);
         let virtual_root_id = path_to_id(&virtual_root_path);
 
         let root = String::from(VIRTUAL_ROOT_PATH);
-        let walked = Vec::from(vec![(&root, &virtual_root_id, true)]);
+        let walked = vec![(&root, &virtual_root_id, true)];
 
         self.recurisve_walk(&walked, true, f);
 
-        write!(f, "\n")
+        Ok(())
     }
 }
 
@@ -202,11 +243,11 @@ pub enum NodeContents<'a> {
     Dir(Vec<&'a String>),
 }
 
-fn to_display_name(v: &String) -> String {
+fn to_display_name(v: &str) -> String {
     if v.is_empty() {
         return String::from("*EMPTY*");
     }
-    return v.clone();
+    v.to_string()
 }
 
 impl ArchiveCache {
@@ -216,7 +257,7 @@ impl ArchiveCache {
         from_sibling: bool,
         f: &mut Formatter,
     ) {
-        debug_assert!(walked_path.len() >= 1);
+        debug_assert!(!walked_path.is_empty());
 
         let this_node = &walked_path[walked_path.len() - 1];
 
@@ -224,7 +265,7 @@ impl ArchiveCache {
 
         if from_sibling {
             //preserve space of parent
-            let _ = write!(f, "\n");
+            let _ = writeln!(f);
 
             for (idx, tuple) in walked_path.split_last().unwrap().1.iter().enumerate() {
                 let name = to_display_name(tuple.0);
@@ -256,7 +297,7 @@ impl ArchiveCache {
 
         let _ = write!(f, "{}", to_display_name(walked_path.last().unwrap().0));
 
-        if let None = entry {
+        if entry.is_none() {
             //this is leaf node
             return;
         }
@@ -267,7 +308,7 @@ impl ArchiveCache {
 
         for (idx, name_id) in children.iter().enumerate() {
             {
-                let mut temp = walked_path.clone();
+                let mut temp = walked_path.to_owned();
                 temp.push((name_id.0, name_id.1, idx == children.len() - 1));
                 self.recurisve_walk(&temp, !first, f);
             }
@@ -287,7 +328,7 @@ impl ArchiveCache {
 
         ret.dir_tree.insert(virtual_root_id, HashMap::new());
 
-        return ret;
+        ret
     }
 
     pub fn invalid_path(&mut self, virtual_path: &PathU8) {
@@ -348,7 +389,7 @@ impl ArchiveCache {
         }
 
         trace!("no cache for {:?}", full_path);
-        return None;
+        None
     }
 
     fn recursive_try(&mut self, virtual_path: &PathU8, rel: &PathU8) -> std::io::Result<bool> {
@@ -374,17 +415,7 @@ impl ArchiveCache {
             .get_mut(&path_to_id(virtual_path))
             .unwrap();
 
-        let mut partical_try = rel.clone();
-
-        let mut left_path = PathU8::from("");
-
-        for i in 0..rel.iter().count() + 1 {
-            if i != 0 {
-                let comp = PathU8::from(partical_try.iter().last().unwrap());
-                partical_try.pop();
-                left_path = join_may_empty(&comp.to_owned(), &left_path);
-            }
-
+        for (partical_try, left_path) in RevPathWalker::new(&rel) {
             let full_virtual = join_may_empty(virtual_path, &partical_try);
             if self.dir_tree.contains_key(&path_to_id(&full_virtual)) {
                 {
@@ -415,10 +446,6 @@ impl ArchiveCache {
                     let ar_entry = kv.get();
 
                     let mut reader = ar_and_entries.0.reader_for(ar_entry)?;
-
-                    //allocate memory
-                    let layout: std::alloc::Layout =
-                        std::alloc::Layout::from_size_align(ar_entry.size(), 1).unwrap();
 
                     binary = Vec::with_capacity(ar_entry.size());
 
@@ -482,13 +509,13 @@ impl ArchiveCache {
 
         //all path tried, but no matched archive
 
-        return Err(std::io::Error::new(
+        Err(std::io::Error::new(
             std::io::ErrorKind::NotFound,
             "no entry matched ".to_owned()
                 + rel.to_str().unwrap()
                 + " under "
                 + virtual_path.to_str().unwrap(),
-        ));
+        ))
     }
 
     pub fn get(&mut self, path: &PathU8) -> std::io::Result<NodeContents> {
@@ -498,10 +525,8 @@ impl ArchiveCache {
             return Ok(hit);
         }
 
-        return self.slow_try(path);
-
+        self.slow_try(path)
     }
-
 
     pub fn slow_try(&mut self, path: &PathU8) -> std::io::Result<NodeContents> {
         trace!("slow try {:?}", path);
@@ -560,12 +585,8 @@ impl ArchiveCache {
         self.recursive_try(&matched, &PathU8::from(rel))?;
 
         match self.quick_try(path) {
-            Some(result) => {
-                return Ok(result);
-            }
-            None => {
-                return Err(Error::new(ErrorKind::NotFound, ""));
-            }
+            Some(result) => Ok(result),
+            None => Err(Error::new(ErrorKind::NotFound, "")),
         }
     }
 
@@ -579,7 +600,7 @@ impl ArchiveCache {
 
             let parent_id = path_to_id(&parent);
 
-            let entry = self.dir_tree.entry(parent_id).or_insert(HashMap::new());
+            let entry = self.dir_tree.entry(parent_id).or_insert_with(HashMap::new);
 
             let utf8 = String::from(comp.to_str().unwrap());
             parent = full_path;
@@ -621,7 +642,7 @@ impl ArchiveCache {
         let mut entries = HashMap::new();
 
         for f in ar.iter() {
-            self.grow_under(virtual_path, &PathU8::from(f.name().clone()));
+            self.grow_under(virtual_path, &PathU8::from(f.name()));
             entries.insert(f.name().to_owned(), f);
         }
 
@@ -639,7 +660,7 @@ impl ArchiveCache {
                 .unwrap()
                 .keys(),
         );
-        return NodeContents::Dir(ret);
+        NodeContents::Dir(ret)
     }
 
     pub fn set_archive(
@@ -670,7 +691,7 @@ impl ArchiveCache {
         let ar = ArArchive::new(ArStream::from_file(archive_path)?, None)?;
 
         trace!("added archive {:?} as {:?}", archive_path, virtual_path);
-        return Ok(self.set_archive_internal(virtual_path, ar, false));
+        Ok(self.set_archive_internal(virtual_path, ar, false))
     }
 }
 
@@ -759,6 +780,34 @@ mod tests {
         for (i, v) in cache.iter() {
             println!("iter key {}, v {}", i, v);
         }
+    }
+    #[test]
+    fn test_rev_path_walk() {
+        let walker = RevPathWalker::new(&PathU8::from(""));
+
+        let mut counter = 0;
+
+        for (root, left) in walker {
+            assert_eq!(root, PathU8::from(""));
+            assert_eq!(left, PathU8::from(""));
+            counter += 1;
+        }
+
+        assert_eq!(counter, 1);
+
+        let walker2 = RevPathWalker::new(&PathU8::from("34/vd"));
+
+        let result = vec![("34/vd", ""), ("34", "vd"), ("", "34/vd")];
+
+        let mut counter = 0;
+        for (i, pair) in walker2.enumerate() {
+            assert_eq!(pair.0, PathU8::from(result[i].0));
+            assert_eq!(pair.1, PathU8::from(result[i].1));
+
+            counter = i;
+        }
+
+        assert_eq!(counter, 2);
     }
 
     #[test]

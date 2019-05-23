@@ -7,11 +7,10 @@ mod cache;
 mod fs;
 mod server;
 
+fn main() {
+    let _ = simple_logger::init();
 
-fn main(){
-    simple_logger::init();
-
-    server::run_server(([0, 0, 0, 0], 31257).into(), &cache::PathU8::from("."));
+    let _ = server::run_server(([0, 0, 0, 0], 31257).into(), &cache::PathU8::from("."));
 }
 
 #[cfg(test)]
@@ -20,7 +19,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_server(){
+    fn test_server() {
 
         /*
         let thrd=std::thread::spawn(||{
@@ -31,4 +30,3 @@ mod tests {
         */
     }
 }
-

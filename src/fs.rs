@@ -1,12 +1,14 @@
 extern crate relative_path;
 extern crate tree_magic;
-use super::cache::{is_archive, join_may_empty, ArchiveCache, FileOrMem, NodeContents, PathU8};
+use super::cache::{
+    is_archive, join_may_empty, ArchiveCache, FileOrMem, NodeContents, PathU8, RevPathWalker,
+};
 use relative_path::RelativePathBuf;
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 use std::sync::{mpsc::channel, Mutex};
 use std::time::Duration;
-use std::{fs, fs::File, io::BufReader};
+use std::{fs::File, io::BufReader};
 
 use std::io::{Error, ErrorKind, Read, Write};
 
@@ -27,14 +29,14 @@ impl<'a> NodeContents<'a> {
         match self {
             NodeContents::File(bin) => {
                 w.write_all(bin)?;
-                return Ok(tree_magic::from_u8(&bin));
+                Ok(tree_magic::from_u8(&bin))
             }
             NodeContents::Dir(dirs) => {
                 for d in dirs {
                     w.write_all(d.as_bytes())?;
                     w.write_all(b"\n")?;
                 }
-                return Ok(String::from(MIME_TEXT));
+                Ok(String::from(MIME_TEXT))
             }
         }
     }
@@ -50,7 +52,7 @@ impl Fs {
         let watcher: Result<RecommendedWatcher, notify::Error> =
             Watcher::new(tx, Duration::from_secs(2));
 
-        if let Err(_) = watcher {
+        if watcher.is_err() {
             return;
         }
 
@@ -84,7 +86,7 @@ impl Fs {
     }
 
     pub fn new(path: &PathU8) -> std::io::Result<Fs> {
-        debug!("path {:?}",path);
+        debug!("path {:?}", path);
         let abs_root = std::fs::canonicalize(path)?;
 
         debug!("fs normalized root {:?}", abs_root);
@@ -94,7 +96,7 @@ impl Fs {
         //access root . root is special since it can be virtual root of all
         //partition driver under windows
 
-        return Ok(ret);
+        Ok(ret)
     }
 
     fn try_in_archive(
@@ -122,8 +124,8 @@ impl Fs {
         }
 
         let result = lock.get(&join_may_empty(virtual_path, left))?;
-                
-        return result.write_to(w);
+
+        result.write_to(w)
     }
 
     fn direct_file_access(&self, path: &PathU8, w: &mut Write) -> std::io::Result<String> {
@@ -135,7 +137,7 @@ impl Fs {
         BufReader::new(file).read_to_end(&mut buf)?;
 
         w.write_all(&buf)?;
-        return Ok(tree_magic::from_filepath(path));
+        Ok(tree_magic::from_filepath(path))
     }
 
     fn try_access(
@@ -146,18 +148,8 @@ impl Fs {
     ) -> std::io::Result<String> {
         trace!("try access {:?}", path);
 
-        let mut try_path = self.root.join(path);
-
-        let mut left = PathU8::from("");
-
-
-        for i in 0..path.iter().count() + 1 {
-            if i != 0 {
-                let comp = PathU8::from(try_path.iter().last().unwrap());
-                try_path.pop();
-
-                left = join_may_empty(&PathU8::from(comp), &left);
-            }
+        for (i, (this_root, left)) in RevPathWalker::new(path).enumerate() {
+            let try_path = self.root.join(this_root);
 
             trace!("try {:?}, left {:?}", try_path, left);
 
@@ -210,10 +202,10 @@ impl Fs {
             return self.try_in_archive(cache, &rel_to_archive, &try_path, &left, w);
         }
 
-        return Err(Error::new(
+        Err(Error::new(
             ErrorKind::NotFound,
             path.to_str().unwrap().to_owned() + "not matched in filesystem",
-        ));
+        ))
     }
 
     pub fn read<W: std::io::Write>(
@@ -258,7 +250,7 @@ impl Fs {
         //
         //
 
-        return self.try_access(cache, path, writer);
+        self.try_access(cache, path, writer)
     }
 }
 
@@ -287,10 +279,9 @@ mod tests {
     }
 
     #[test]
-    fn test_can(){
-
+    fn test_can() {
         let canonicalized = RelativePathBuf::new().to_path("../../");
-        println!("{:?}",canonicalized);
+        println!("{:?}", canonicalized);
     }
 
     #[test]
