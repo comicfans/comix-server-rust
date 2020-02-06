@@ -18,6 +18,4 @@ pretty-bytes = "*"
 relative-path = "0.4.0"
 simple_logger = "*"
 tree_magic = "*"
-
-[dependencies.unarr]
-path = "/home/wangxinyu/unarr.rs"
+unarr = { git = "https://github.com/comicfans/unarr.rs.git" }
